@@ -15,7 +15,7 @@ return new class extends Migration
             $table->id();
             $table->string('pipeline_code')->unique();
             $table->string('pipeline_name');
-            $table->string('pipeline_description');
+            $table->longText('pipeline_description');
             $table->timestamps();
         });
     }
