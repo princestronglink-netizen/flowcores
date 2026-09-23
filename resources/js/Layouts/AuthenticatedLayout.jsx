@@ -14,7 +14,8 @@ import {
 
 const navItems = [
     { name: 'Dashboard', route: 'dashboard.index', icon: LayoutGrid },
-    { name: 'Requests', route: 'requests.index', icon: LayoutGrid },
+    { name: 'Transactions', route: 'transactions.index', icon: LayoutGrid },
+    { name: 'Clients', route: 'clients.index', icon: LayoutGrid },
 ];
 
 const LOGO_URL = '/images/flowcore-logo.png';
@@ -240,6 +241,12 @@ function SidebarContent({ user, onNavigate, collapsed = false }) {
     );
 }
 
+/**
+ * `fullWidth` (default true): the page area is edge to edge with no padding
+ * and no max-width, and stretches to fill the viewport height so children
+ * like <PageCard> can fill it.
+ * `fullWidth={false}`: the old padded, centered `max-w-7xl` container.
+ */
 export default function AuthenticatedLayout({ header, children, fullWidth = true }) {
     const user = usePage().props.auth.user;
     const [mobileOpen, setMobileOpen] = useState(false);
@@ -289,21 +296,24 @@ export default function AuthenticatedLayout({ header, children, fullWidth = true
                 </div>
             )}
 
-            {/* Main column */}
+            {/* Main column — a flex column so <main> can stretch to fill the viewport */}
             <div
-                className={collapsed ? 'lg:pl-[76px]' : 'lg:pl-64'}
+                className={[
+                    'flex min-h-screen min-w-0 flex-col',
+                    collapsed ? 'lg:pl-[76px]' : 'lg:pl-64',
+                ].join(' ')}
                 style={{ transition: 'padding-left 200ms ease-in-out' }}
             >
                 {/* Gradient accent line, same one used at the top of the login form panel */}
                 <div
-                    className="h-[3px]"
+                    className="h-[3px] shrink-0"
                     style={{ background: `linear-gradient(to right, ${PALETTE.slate}, ${PALETTE.teal}, ${PALETTE.slate})` }}
                     aria-hidden="true"
                 />
 
                 {/* Top bar */}
                 <div
-                    className="sticky top-0 z-30 flex h-16 items-center gap-3 px-4 backdrop-blur-md sm:px-6 lg:px-8"
+                    className="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-3 px-4 backdrop-blur-md sm:px-6 lg:px-8"
                     style={{
                         borderBottom: `1px solid ${PALETTE.cream}`,
                         background: `linear-gradient(180deg, ${PALETTE.mint}f2 0%, rgba(255,255,255,0.9) 100%)`,
@@ -382,22 +392,24 @@ export default function AuthenticatedLayout({ header, children, fullWidth = true
                     </div>
                 </div>
 
-                {/* Page content — full-bleed, no centered max-w box eating up space.
-                    On very large monitors (2xl+) it caps out so lines don't stretch
-                    unreadably wide, but on normal/laptop screens it uses the full area. */}
-                <main className="relative">
-                    <div
-                        className="pointer-events-none absolute inset-0 opacity-[0.5]"
-                        style={{
-                            backgroundImage: `radial-gradient(${PALETTE.slate}14 1px, transparent 1px)`,
-                            backgroundSize: '22px 22px',
-                        }}
-                        aria-hidden="true"
-                    />
+                {/* Page content — flex-1 so it fills all remaining height.
+                    fullWidth: no padding, no max-width, edge to edge.
+                    Otherwise: the old padded, centered container. */}
+                <main className="relative flex min-w-0 flex-1 flex-col">
+                    {!fullWidth && (
+                        <div
+                            className="pointer-events-none absolute inset-0 opacity-[0.5]"
+                            style={{
+                                backgroundImage: `radial-gradient(${PALETTE.slate}14 1px, transparent 1px)`,
+                                backgroundSize: '22px 22px',
+                            }}
+                            aria-hidden="true"
+                        />
+                    )}
                     <div
                         className={[
-                            'relative px-4 py-6 sm:px-6 lg:px-8',
-                            fullWidth ? '2xl:max-w-[1920px] 2xl:mx-auto' : 'max-w-7xl mx-auto',
+                            'relative flex min-w-0 flex-1 flex-col',
+                            fullWidth ? '' : 'mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8',
                         ].join(' ')}
                     >
                         {children}

@@ -11,12 +11,11 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('items', function (Blueprint $table) {
+        Schema::create('pipelines', function (Blueprint $table) {
             $table->id();
-            $table->string('item_code')->unique();
-            $table->string('item_name');
-            $table->foreignId('category_id')->constrained()->onDelete('cascade');
-            $table->string('item_description')->nullable();
+            $table->string('pipeline_code')->unique();
+            $table->string('pipeline_name');
+            $table->string('pipeline_description');
             $table->timestamps();
         });
     }
@@ -26,6 +25,6 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::dropIfExists('items');
+        Schema::dropIfExists('pipelines');
     }
 };
