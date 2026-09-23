@@ -7,19 +7,13 @@ const PALETTE = {
     slate: '#667292',
 };
 
-export default function PageCard({ children, className = '', title, actions }) {
+export default function PageCard({ children, className = '', title, actions, toolbar }) {
     return (
-        <div
-            className={`rounded-xl bg-white ${className}`}
-            style={{
-                border: `1px solid ${PALETTE.cream}`,
-                boxShadow: `0 1px 2px rgba(15,23,42,0.04), 0 8px 16px -4px ${PALETTE.slate}1a, 0 24px 48px -12px ${PALETTE.slate}26`,
-            }}
-        >
+        <section className={`flex min-h-full w-full flex-1 flex-col bg-white ${className}`}>
             {(title || actions) && (
-                <div
-                    className="flex items-center justify-between px-6 py-4"
-                    style={{ borderBottom: `1px solid ${PALETTE.cream}80` }}
+                <header
+                    className="flex shrink-0 items-center justify-between px-6 py-4"
+                    style={{ borderBottom: `1px solid ${PALETTE.cream}` }}
                 >
                     {title && (
                         <h3 className="text-sm font-semibold" style={{ color: PALETTE.slate }}>
@@ -27,9 +21,14 @@ export default function PageCard({ children, className = '', title, actions }) {
                         </h3>
                     )}
                     {actions}
-                </div>
+                </header>
             )}
-            {children}
-        </div>
+
+            {/* Optional toolbar slot: sits between the header and the body.
+                The toolbar draws its own bottom border. */}
+            {toolbar && <div className="shrink-0">{toolbar}</div>}
+
+            <div className="flex min-w-0 flex-1 flex-col justify-start">{children}</div>
+        </section>
     );
 }
