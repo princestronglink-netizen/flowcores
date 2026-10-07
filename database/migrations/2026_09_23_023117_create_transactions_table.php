@@ -15,7 +15,7 @@ return new class extends Migration
             $table->id();
             $table->string('client_name');
             $table->string('contact_person');
-            $table->foreignId('pipeline')->constrained()->cascadeOnDelete();
+            $table->foreignId('pipeline_id')->constrained()->cascadeOnDelete();
             $table->decimal('amount');
             $table->longtext('note')->nullable();
             $table->timestamps();

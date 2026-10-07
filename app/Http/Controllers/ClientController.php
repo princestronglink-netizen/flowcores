@@ -69,5 +69,42 @@ class ClientController extends Controller
 
         return redirect()->back();
     }
+
+    public function quickStore(Request $request)
+    {
+        $validated = $request->validate([
+            'client_code'    => 'required|string|max:255|unique:clients,client_code',
+            'client_name'    => 'required|string|max:255',
+            'contact_person' => 'required|string|max:255',
+            'contact_number' => 'nullable|string|max:255',
+            'email'          => 'nullable|email|max:255',
+        ]);
+
+        $client = Client::create([
+            'client_code' => $validated['client_code'],
+            'client_name' => $validated['client_name'],
+        ]);
+
+        $client->contactPeople()->create([
+            'contact_person' => $validated['contact_person'],
+            'contact_number' => $validated['contact_number'] ?? null,
+            'email'          => $validated['email'] ?? null,
+        ]);
+
+        return response()->json($client->load('contactPeople'));
+    }
+
+    public function quickStoreContact(Request $request, Client $client)
+    {
+        $validated = $request->validate([
+            'contact_person' => 'required|string|max:255',
+            'contact_number' => 'nullable|string|max:255',
+            'email'          => 'nullable|email|max:255',
+        ]);
+
+        $contact = $client->contactPeople()->create($validated);
+
+        return response()->json($contact);
+    }
     
 }
