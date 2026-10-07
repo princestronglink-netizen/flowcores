@@ -10,11 +10,13 @@ import {
     PanelLeftOpen,
     Bell,
     Search,
+    GitBranch,
 } from 'lucide-react';
 
 const navItems = [
     { name: 'Dashboard', route: 'dashboard.index', icon: LayoutGrid },
     { name: 'Transactions', route: 'transactions.index', icon: LayoutGrid },
+    { name: 'Pipelines', route: 'pipelines.index', icon: GitBranch },
     { name: 'Clients', route: 'clients.index', icon: LayoutGrid },
 ];
 
