@@ -3,211 +3,186 @@ import axios from 'axios';
 import { Link, useForm } from '@inertiajs/react';
 import { Button } from '@/Components/ui/Button';
 import {
-    Receipt,
-    Building2,
-    UserRound,
-    GitBranch,
-    Flag,
-    Trophy,
-    StickyNote,
-    Package,
-    Banknote,
-    Plus,
-    Trash2,
-    X,
     ArrowLeft,
-    Info,
+    Building2,
+    Lock,
+    Package,
+    Plus,
+    Receipt,
+    StickyNote,
+    Trash2,
+    Trophy,
+    UserRound,
+    X,
 } from 'lucide-react';
+import {
+    Banner,
+    Field,
+    IconButton,
+    LinkButton,
+    Panel,
+    PriorityPill,
+    PRIORITIES,
+    Segmented,
+    SummaryLine,
+    currency,
+    cx,
+    input,
+    inputCls,
+    textareaCls,
+} from '@/Components/ui/kit';
 
-const PALETTE = {
-    slate: '#667292',
-    teal: '#8d9db6',
-    cream: '#bccad6',
-    deepEdge: '#3a4157',
-    mist: '#eef1f5',
-};
+// category_id is only used to narrow the Item dropdown; the server saves item_variant_id, quantity and unit_price.
+const emptyItem = () => ({ item_id: '', item_brand_id: '', item_variant_id: '', quantity: 1, unit_price: '' });
 
-const PRIORITY_OPTIONS = [
-    { value: 'Low', color: '#8fb08d' },
-    { value: 'Medium', color: '#c9a24b' },
-    { value: 'High', color: '#c97a4b' },
-    { value: 'Critical', color: '#b5504a' },
-];
-
-const emptyItem = () => ({ item_name: '', quantity: 1, unit_price: '' });
-
-const emptyForm = (pipelines) => ({
+const emptyForm = () => ({
     name: '',
     client_id: '',
     client_contact_person_id: '',
-    pipeline: pipelines[0]?.id ?? '',
-    priority: PRIORITY_OPTIONS[1].value,
+    priority: 'Medium',
     winning_message: '',
     items: [emptyItem()],
     note: '',
 });
 
-const currency = (n) =>
-    Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const variantLabel = (v) => [v.unit_of_measure, v.size].filter(Boolean).join(' · ') + ` — ${currency(v.price)}`;
 
-// Reusable section wrapper so every block of the form reads the same way:
-// a numbered badge, an icon, a title + short description, then the fields.
-function Section({ step, icon: Icon, title, description, children }) {
-    return (
-        <section>
-            <div className="flex items-start gap-3">
-                <span
-                    className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold"
-                    style={{ backgroundColor: PALETTE.deepEdge, color: '#fff' }}
-                >
-                    {step}
-                </span>
-                <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                        <Icon className="h-4 w-4" style={{ color: PALETTE.slate }} />
-                        <h3 className="text-sm font-semibold" style={{ color: PALETTE.deepEdge }}>
-                            {title}
-                        </h3>
-                    </div>
-                    {description && (
-                        <p className="mt-0.5 text-xs" style={{ color: PALETTE.slate }}>
-                            {description}
-                        </p>
-                    )}
-                    <div className="mt-4">{children}</div>
-                </div>
-            </div>
-        </section>
-    );
-}
+const rowGrid = 'lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1.5fr)_84px_116px_108px_32px]';
+const mobileLabel = 'mb-1 block text-xs font-medium text-slate-500 lg:hidden';
 
-export default function TransactionForm({ pipelines = [], clients = [], transaction = null }) {
+/**
+ * itemsLocked: true once a delivery exists (or the order was deducted the old way).
+ * Items, quantities and prices are then read-only; everything else stays editable.
+ * The server enforces the same rule; this keeps the form honest about it.
+ */
+export default function TransactionForm({ clients = [], catalog = [], transaction = null, itemsLocked = false }) {
     const isEditing = Boolean(transaction);
 
     const [showWinningMessage, setShowWinningMessage] = useState(Boolean(transaction?.winning_message));
-
-    const [pipelineList, setPipelineList] = useState(pipelines);
     const [clientList, setClientList] = useState(clients);
-
-    const [showAddPipeline, setShowAddPipeline] = useState(false);
     const [showAddClient, setShowAddClient] = useState(false);
     const [showAddContact, setShowAddContact] = useState(false);
-
-    const [newPipeline, setNewPipeline] = useState({ pipeline_code: '', pipeline_name: '', pipeline_description: '' });
     const [newClient, setNewClient] = useState({ client_code: '', client_name: '', contact_person: '', contact_number: '', email: '' });
     const [newContact, setNewContact] = useState({ contact_person: '', contact_number: '', email: '' });
-
     const [quickErrors, setQuickErrors] = useState({});
     const [quickProcessing, setQuickProcessing] = useState(false);
+    const [categoryFilter, setCategoryFilter] = useState('');
 
     const initialData = transaction
         ? {
               name: transaction.name ?? '',
               client_id: transaction.client_id ?? transaction.client?.id ?? '',
-              client_contact_person_id:
-                  transaction.client_contact_person_id ?? transaction.contact_person?.id ?? '',
-              pipeline: transaction.pipeline_id ?? transaction.pipeline?.id ?? '',
-              priority: transaction.priority ?? PRIORITY_OPTIONS[1].value,
+              client_contact_person_id: transaction.client_contact_person_id ?? transaction.contact_person?.id ?? '',
+              priority: transaction.priority ?? 'Medium',
               winning_message: transaction.winning_message ?? '',
               items:
                   transaction.items?.length > 0
                       ? transaction.items.map((i) => ({
-                            item_name: i.item_name ?? '',
+                            item_id: i.variant?.brand?.item_id ?? '',
+                            item_brand_id: i.variant?.brand?.id ?? '',
+                            item_variant_id: i.item_variant_id ?? '',
                             quantity: i.quantity ?? 1,
                             unit_price: i.unit_price ?? '',
                         }))
                       : [emptyItem()],
               note: transaction.note ?? '',
           }
-        : emptyForm(pipelines);
+        : emptyForm();
 
     const { data, setData, post, put, processing, errors, clearErrors } = useForm(initialData);
-
     const items = data.items ?? [emptyItem()];
 
-    useEffect(() => {
-        setPipelineList(pipelines);
-    }, [pipelines]);
-
-    useEffect(() => {
-        setClientList(clients);
-    }, [clients]);
+    useEffect(() => setClientList(clients), [clients]);
 
     const selectedClient = useMemo(
         () => clientList.find((c) => String(c.id) === String(data.client_id)),
-        [clientList, data.client_id]
+        [clientList, data.client_id],
     );
-
     const contactOptions = selectedClient?.contact_people ?? [];
+    const selectedContact = contactOptions.find((c) => String(c.id) === String(data.client_contact_person_id));
 
+    // ---- catalog lookups ----
+    const categories = useMemo(() => {
+        const map = new Map();
+        catalog.forEach((i) => i.category && map.set(i.category.id, i.category));
+        return [...map.values()].sort((a, b) => a.category_name.localeCompare(b.category_name));
+    }, [catalog]);
+
+    const itemsFor = () =>
+        catalog.filter((i) => !categoryFilter || String(i.item_category_id) === String(categoryFilter));
+    const brandsFor = (row) => catalog.find((i) => String(i.id) === String(row.item_id))?.brands ?? [];
+    const variantsFor = (row) =>
+        brandsFor(row).find((b) => String(b.id) === String(row.item_brand_id))?.variants ?? [];
+    const variantFor = (row) => variantsFor(row).find((v) => String(v.id) === String(row.item_variant_id));
+
+    // ---- totals ----
     const total = useMemo(
-        () =>
-            items.reduce(
-                (sum, item) => sum + (Number(item.quantity) || 0) * (Number(item.unit_price) || 0),
-                0
-            ),
-        [items]
+        () => items.reduce((s, r) => s + (Number(r.quantity) || 0) * (Number(r.unit_price) || 0), 0),
+        [items],
     );
+    const deliveredAt = (index) => Number(transaction?.items?.[index]?.delivered_quantity ?? 0);
+    const orderedDelivered = itemsLocked
+        ? (transaction?.items ?? []).reduce((s, l) => s + Number(l.delivered_quantity ?? 0), 0)
+        : 0;
+    const orderedTotal = itemsLocked ? (transaction?.items ?? []).reduce((s, l) => s + Number(l.quantity ?? 0), 0) : 0;
 
-    const itemCount = items.length;
+    // Two rows can share a variant, so add them up before comparing with stock.
+    const shortages = useMemo(() => {
+        if (itemsLocked) return [];
+        const need = {};
+        items.forEach((r) => {
+            if (r.item_variant_id) need[r.item_variant_id] = (need[r.item_variant_id] || 0) + (Number(r.quantity) || 0);
+        });
+        return Object.entries(need)
+            .map(([id, qty]) => {
+                const v = catalog.flatMap((i) => i.brands.flatMap((b) => b.variants)).find((x) => String(x.id) === id);
+                return v && qty > Number(v.stock) ? { id, qty, stock: Number(v.stock) } : null;
+            })
+            .filter(Boolean);
+    }, [items, catalog, itemsLocked]);
 
+    // ---- form helpers ----
     const updateField = (field, value) => {
         setData(field, value);
-        if (String(value).trim() !== '') {
-            clearErrors(field);
-        }
+        if (String(value).trim() !== '') clearErrors(field);
     };
 
     const handleClientChange = (value) => {
-        updateField('client_id', value);
-        updateField('client_contact_person_id', '');
+        setData((prev) => ({ ...prev, client_id: value, client_contact_person_id: '' }));
+        clearErrors('client_id');
     };
 
-    const updateItem = (index, field, value) => {
-        const updated = items.map((item, i) => (i === index ? { ...item, [field]: value } : item));
-        setData('items', updated);
-        if (String(value).trim() !== '') {
-            clearErrors(`items.${index}.${field}`);
-        }
+    const patchItem = (index, patch) => {
+        if (itemsLocked) return;
+        setData('items', items.map((it, i) => (i === index ? { ...it, ...patch } : it)));
     };
-
-    const addItem = () => {
-        setData('items', [...items, emptyItem()]);
+    const changeItem = (i, v) => patchItem(i, { item_id: v, item_brand_id: '', item_variant_id: '', unit_price: '' });
+    const changeBrand = (i, v) => patchItem(i, { item_brand_id: v, item_variant_id: '', unit_price: '' });
+    const changeVariant = (i, variantId) => {
+        const variant = variantsFor(items[i]).find((v) => String(v.id) === String(variantId));
+        patchItem(i, { item_variant_id: variantId, unit_price: variant ? variant.price : '' });
+        clearErrors(`items.${i}.item_variant_id`, `items.${i}.unit_price`);
     };
-
-    const removeItem = (index) => {
-        setData('items', items.filter((_, i) => i !== index));
+    const updateItem = (i, field, value) => {
+        patchItem(i, { [field]: value });
+        if (String(value).trim() !== '') clearErrors(`items.${i}.${field}`);
     };
+    const addItem = () => !itemsLocked && setData('items', [...items, emptyItem()]);
+    const removeItem = (i) => !itemsLocked && setData('items', items.filter((_, idx) => idx !== i));
 
-    const submitNewPipeline = async () => {
-        setQuickProcessing(true);
-        setQuickErrors({});
-        try {
-            const res = await axios.post(route('pipelines.quickStore'), newPipeline);
-            const created = res.data;
-            setPipelineList((prev) => [...prev, created]);
-            setData('pipeline', created.id);
-            clearErrors('pipeline');
-            setNewPipeline({ pipeline_code: '', pipeline_name: '', pipeline_description: '' });
-            setShowAddPipeline(false);
-        } catch (err) {
-            if (err.response?.status === 422) setQuickErrors(err.response.data.errors);
-        } finally {
-            setQuickProcessing(false);
-        }
-    };
-
+    // ---- quick add ----
     const submitNewClient = async () => {
         setQuickProcessing(true);
         setQuickErrors({});
         try {
-            const res = await axios.post(route('clients.quickStore'), newClient);
-            const created = res.data;
+            const { data: created } = await axios.post(route('clients.quickStore'), newClient);
             setClientList((prev) => [...prev, created]);
-            setData('client_id', created.id);
-            setData('client_contact_person_id', created.contact_people[0]?.id ?? '');
-            clearErrors('client_id');
-            clearErrors('client_contact_person_id');
+            setData((prev) => ({
+                ...prev,
+                client_id: created.id,
+                client_contact_person_id: created.contact_people[0]?.id ?? '',
+            }));
+            clearErrors('client_id', 'client_contact_person_id');
             setNewClient({ client_code: '', client_name: '', contact_person: '', contact_number: '', email: '' });
             setShowAddClient(false);
         } catch (err) {
@@ -222,14 +197,13 @@ export default function TransactionForm({ pipelines = [], clients = [], transact
         setQuickProcessing(true);
         setQuickErrors({});
         try {
-            const res = await axios.post(route('clients.quickStoreContact', data.client_id), newContact);
-            const created = res.data;
+            const { data: created } = await axios.post(route('clients.quickStoreContact', data.client_id), newContact);
             setClientList((prev) =>
                 prev.map((c) =>
                     String(c.id) === String(data.client_id)
                         ? { ...c, contact_people: [...(c.contact_people ?? []), created] }
-                        : c
-                )
+                        : c,
+                ),
             );
             setData('client_contact_person_id', created.id);
             clearErrors('client_contact_person_id');
@@ -244,601 +218,456 @@ export default function TransactionForm({ pipelines = [], clients = [], transact
 
     const submit = (e) => {
         e.preventDefault();
-
-        if (isEditing) {
-            put(route('transactions.update', transaction.id));
-        } else {
-            post(route('transactions.store'));
-        }
+        if (isEditing) put(route('transactions.update', transaction.id));
+        else post(route('transactions.store'));
     };
 
-    const hasBlockingErrors = Object.keys(errors ?? {}).length > 0;
-
-    const inputStyle = { borderColor: PALETTE.cream, color: PALETTE.deepEdge };
-    const errorInputStyle = { borderColor: '#dc2626', color: PALETTE.deepEdge };
-    const labelStyle = { color: PALETTE.slate };
-    const labelClass = 'flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide';
-    const fieldClass =
-        'mt-1 block w-full rounded-md border px-3 py-2 text-sm transition-shadow focus:outline-none focus:ring-2 disabled:bg-gray-50 disabled:text-gray-400';
-    const errorClass = 'mt-1 text-xs text-red-600';
-    const quickPanelStyle = { borderColor: PALETTE.cream, backgroundColor: PALETTE.mist };
-    const smallFieldClass =
-        'mt-1 block w-full rounded-md border px-2.5 py-1.5 text-sm bg-white focus:outline-none focus:ring-2';
+    const hasErrors = Object.keys(errors ?? {}).length > 0;
+    const listUrl = route('transactions.index');
+    const quickBox = 'mt-3 space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3';
 
     return (
-        <form onSubmit={submit} noValidate className="mx-auto w-full max-w-[1600px] p-6 2xl:p-10">
-            <Link
-                href={route('transactions.index')}
-                className="mb-4 inline-flex items-center gap-1.5 text-sm font-semibold"
-                style={{ color: PALETTE.slate }}
-            >
+        <form onSubmit={submit} noValidate className="mx-auto w-full max-w-[1680px] p-4 sm:p-6">
+            <Link href={listUrl} className="mb-4 inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-slate-900">
                 <ArrowLeft className="h-4 w-4" />
-                Back to Transactions
+                Transactions
             </Link>
 
-            <div className="rounded-lg border bg-white p-6 lg:p-8" style={{ borderColor: PALETTE.cream }}>
-                    <div className="flex items-center gap-3 border-b pb-6" style={{ borderColor: PALETTE.cream }}>
-                        <span
-                            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full"
-                            style={{ backgroundColor: PALETTE.mist }}
-                        >
-                            <Receipt className="h-4 w-4" style={{ color: PALETTE.slate }} />
-                        </span>
-                        <div>
-                            <h2 className="text-base font-semibold" style={{ color: PALETTE.deepEdge }}>
-                                {isEditing ? 'Edit Transaction' : 'New Transaction'}
-                            </h2>
-                            <p className="text-sm" style={{ color: PALETTE.slate }}>
-                                {isEditing
-                                    ? 'Update the details below and save your changes.'
-                                    : 'Fill in the sections below to create a transaction.'}
-                            </p>
+            <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
+                {/* ---------------- Main column ---------------- */}
+                <div className="min-w-0 space-y-5">
+                    <Panel title="Overview" description="Name this transaction and set how urgent it is." icon={Receipt}>
+                        <div className="grid gap-4 md:grid-cols-2">
+                            <Field label="Transaction name" required htmlFor="transaction_name" error={errors.name}>
+                                <input
+                                    id="transaction_name"
+                                    type="text"
+                                    placeholder="e.g. Acme Corp — Annual Renewal"
+                                    value={data.name}
+                                    onChange={(e) => updateField('name', e.target.value)}
+                                    className={input(errors.name)}
+                                />
+                            </Field>
+                            <Field label="Priority" error={errors.priority}>
+                                <Segmented
+                                    label="Priority"
+                                    options={PRIORITIES}
+                                    value={data.priority}
+                                    onChange={(v) => updateField('priority', v)}
+                                />
+                            </Field>
                         </div>
-                    </div>
+                    </Panel>
 
-                    <div className="mt-6 space-y-8" style={{ borderColor: PALETTE.cream }}>
-                        {/* Step 1 — Overview */}
-                        <Section
-                            step={1}
-                            icon={Receipt}
-                            title="Transaction Overview"
-                            description="Name this transaction and set its pipeline and priority."
-                        >
-                            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                                <div>
-                                    <label htmlFor="transaction_name" className={labelClass} style={labelStyle}>
-                                        Transaction Name <span style={{ color: PALETTE.slate }}>*</span>
-                                    </label>
-                                    <input
-                                        id="transaction_name"
-                                        type="text"
-                                        placeholder="e.g. Acme Corp — Annual Renewal"
-                                        value={data.name}
-                                        onChange={(e) => updateField('name', e.target.value)}
-                                        className={fieldClass}
-                                        style={errors.name ? errorInputStyle : inputStyle}
-                                    />
-                                    {errors.name && <p className={errorClass}>{errors.name}</p>}
-                                </div>
-
-                                <div>
-                                    <div className="flex h-5 items-center justify-between">
-                                        <label htmlFor="pipeline" className={labelClass} style={labelStyle}>
-                                            <GitBranch className="h-3.5 w-3.5" />
-                                            Pipeline <span style={{ color: PALETTE.slate }}>*</span>
-                                        </label>
-                                        <button
-                                            type="button"
-                                            onClick={() => setShowAddPipeline((v) => !v)}
-                                            className="flex items-center gap-1 text-xs font-semibold"
-                                            style={{ color: PALETTE.slate }}
-                                        >
-                                            <Plus className="h-3.5 w-3.5" />
-                                            New
-                                        </button>
-                                    </div>
-                                    <select
-                                        id="pipeline"
-                                        value={data.pipeline}
-                                        onChange={(e) => updateField('pipeline', e.target.value)}
-                                        className={fieldClass}
-                                        style={errors.pipeline ? errorInputStyle : inputStyle}
-                                    >
-                                        <option value="" disabled>Select a pipeline</option>
-                                        {pipelineList.map((p) => (
-                                            <option key={p.id} value={p.id}>{p.pipeline_name}</option>
-                                        ))}
-                                    </select>
-                                    {errors.pipeline && <p className={errorClass}>{errors.pipeline}</p>}
-
-                                    {showAddPipeline && (
-                                        <div className="mt-2 space-y-2 rounded-md border p-3" style={quickPanelStyle}>
-                                            <input
-                                                type="text"
-                                                placeholder="Pipeline code"
-                                                value={newPipeline.pipeline_code}
-                                                onChange={(e) => setNewPipeline((p) => ({ ...p, pipeline_code: e.target.value }))}
-                                                className={smallFieldClass}
-                                                style={inputStyle}
-                                            />
-                                            {quickErrors.pipeline_code && <p className={errorClass}>{quickErrors.pipeline_code[0]}</p>}
-
-                                            <input
-                                                type="text"
-                                                placeholder="Pipeline name"
-                                                value={newPipeline.pipeline_name}
-                                                onChange={(e) => setNewPipeline((p) => ({ ...p, pipeline_name: e.target.value }))}
-                                                className={smallFieldClass}
-                                                style={inputStyle}
-                                            />
-                                            {quickErrors.pipeline_name && <p className={errorClass}>{quickErrors.pipeline_name[0]}</p>}
-
-                                            <div className="flex justify-end gap-2 pt-1">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setShowAddPipeline(false)}
-                                                    className="text-xs font-semibold"
-                                                    style={{ color: PALETTE.slate }}
-                                                >
-                                                    Cancel
-                                                </button>
-                                                <Button type="button" variant="brand" onClick={submitNewPipeline} disabled={quickProcessing}>
-                                                    Add Pipeline
-                                                </Button>
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
-
-                                <div>
-                                    <div className="flex h-5 items-center">
-                                        <label htmlFor="priority" className={labelClass} style={labelStyle}>
-                                            <Flag className="h-3.5 w-3.5" />
-                                            Priority
-                                        </label>
-                                    </div>
-                                    <select
-                                        id="priority"
-                                        value={data.priority}
-                                        onChange={(e) => updateField('priority', e.target.value)}
-                                        className={fieldClass}
-                                        style={errors.priority ? errorInputStyle : inputStyle}
-                                    >
-                                        {PRIORITY_OPTIONS.map((option) => (
-                                            <option key={option.value} value={option.value}>{option.value}</option>
-                                        ))}
-                                    </select>
-                                    {errors.priority && <p className={errorClass}>{errors.priority}</p>}
-
-                                    <div className="mt-1.5 flex items-center gap-1.5">
-                                        <span
-                                            className="h-2 w-2 rounded-full"
-                                            style={{
-                                                backgroundColor:
-                                                    PRIORITY_OPTIONS.find((o) => o.value === data.priority)?.color ??
-                                                    PALETTE.slate,
-                                            }}
-                                        />
-                                        <span className="text-xs" style={{ color: PALETTE.slate }}>
-                                            {data.priority} priority
-                                        </span>
-                                    </div>
-                                </div>
-                            </div>
-                        </Section>
-
-                        <div className="border-t" style={{ borderColor: PALETTE.cream }} />
-
-                        {/* Step 2 — Client */}
-                        <Section
-                            step={2}
-                            icon={Building2}
-                            title="Client & Contact"
-                            description="Who is this transaction with?"
-                        >
-                            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                                <div>
-                                    <div className="flex h-5 items-center justify-between">
-                                        <label htmlFor="client_id" className={labelClass} style={labelStyle}>
-                                            Client <span style={{ color: PALETTE.slate }}>*</span>
-                                        </label>
-                                        <button
-                                            type="button"
-                                            onClick={() => setShowAddClient((v) => !v)}
-                                            className="flex items-center gap-1 text-xs font-semibold"
-                                            style={{ color: PALETTE.slate }}
-                                        >
-                                            <Plus className="h-3.5 w-3.5" />
-                                            New
-                                        </button>
-                                    </div>
+                    <Panel title="Client" description="Who is this transaction with?" icon={Building2}>
+                        <div className="grid gap-4 md:grid-cols-2">
+                            <div>
+                                <Field
+                                    label="Client"
+                                    required
+                                    htmlFor="client_id"
+                                    error={errors.client_id}
+                                    action={
+                                        <LinkButton icon={Plus} onClick={() => setShowAddClient((v) => !v)}>
+                                            New client
+                                        </LinkButton>
+                                    }
+                                >
                                     <select
                                         id="client_id"
                                         value={data.client_id}
                                         onChange={(e) => handleClientChange(e.target.value)}
-                                        className={fieldClass}
-                                        style={errors.client_id ? errorInputStyle : inputStyle}
+                                        className={input(errors.client_id)}
                                     >
                                         <option value="" disabled>Select a client</option>
                                         {clientList.map((c) => (
                                             <option key={c.id} value={c.id}>{c.client_name}</option>
                                         ))}
                                     </select>
-                                    {errors.client_id && <p className={errorClass}>{errors.client_id}</p>}
+                                </Field>
 
-                                    {showAddClient && (
-                                        <div className="mt-2 space-y-2 rounded-md border p-3" style={quickPanelStyle}>
-                                            <input
-                                                type="text"
-                                                placeholder="Client code"
-                                                value={newClient.client_code}
-                                                onChange={(e) => setNewClient((p) => ({ ...p, client_code: e.target.value }))}
-                                                className={smallFieldClass}
-                                                style={inputStyle}
-                                            />
-                                            {quickErrors.client_code && <p className={errorClass}>{quickErrors.client_code[0]}</p>}
-
-                                            <input
-                                                type="text"
-                                                placeholder="Client name"
-                                                value={newClient.client_name}
-                                                onChange={(e) => setNewClient((p) => ({ ...p, client_name: e.target.value }))}
-                                                className={smallFieldClass}
-                                                style={inputStyle}
-                                            />
-                                            {quickErrors.client_name && <p className={errorClass}>{quickErrors.client_name[0]}</p>}
-
-                                            <input
-                                                type="text"
-                                                placeholder="Contact person"
-                                                value={newClient.contact_person}
-                                                onChange={(e) => setNewClient((p) => ({ ...p, contact_person: e.target.value }))}
-                                                className={smallFieldClass}
-                                                style={inputStyle}
-                                            />
-                                            {quickErrors.contact_person && <p className={errorClass}>{quickErrors.contact_person[0]}</p>}
-
-                                            <div className="flex justify-end gap-2 pt-1">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setShowAddClient(false)}
-                                                    className="text-xs font-semibold"
-                                                    style={{ color: PALETTE.slate }}
-                                                >
-                                                    Cancel
-                                                </button>
-                                                <Button type="button" variant="brand" onClick={submitNewClient} disabled={quickProcessing}>
-                                                    Add Client
-                                                </Button>
+                                {showAddClient && (
+                                    <div className={quickBox}>
+                                        {[
+                                            ['client_code', 'Client code'],
+                                            ['client_name', 'Client name'],
+                                            ['contact_person', 'Contact person'],
+                                        ].map(([key, placeholder]) => (
+                                            <div key={key}>
+                                                <input
+                                                    type="text"
+                                                    placeholder={placeholder}
+                                                    value={newClient[key]}
+                                                    onChange={(e) => setNewClient((p) => ({ ...p, [key]: e.target.value }))}
+                                                    className={input(quickErrors[key])}
+                                                />
+                                                {quickErrors[key] && <p className="mt-1 text-xs text-red-600">{quickErrors[key][0]}</p>}
                                             </div>
+                                        ))}
+                                        <div className="flex justify-end gap-2 pt-1">
+                                            <Button type="button" variant="outline" onClick={() => setShowAddClient(false)}>Cancel</Button>
+                                            <Button type="button" variant="brand" onClick={submitNewClient} disabled={quickProcessing}>
+                                                Add client
+                                            </Button>
                                         </div>
-                                    )}
-                                </div>
-
-                                <div>
-                                    <div className="flex h-5 items-center justify-between">
-                                        <label htmlFor="client_contact_person_id" className={labelClass} style={labelStyle}>
-                                            <UserRound className="h-3.5 w-3.5" />
-                                            Contact Person <span style={{ color: PALETTE.slate }}>*</span>
-                                        </label>
-                                        {data.client_id && (
-                                            <button
-                                                type="button"
-                                                onClick={() => setShowAddContact((v) => !v)}
-                                                className="flex items-center gap-1 text-xs font-semibold"
-                                                style={{ color: PALETTE.slate }}
-                                            >
-                                                <Plus className="h-3.5 w-3.5" />
-                                                New
-                                            </button>
-                                        )}
                                     </div>
+                                )}
+                            </div>
+
+                            <div>
+                                <Field
+                                    label="Contact person"
+                                    required
+                                    htmlFor="client_contact_person_id"
+                                    error={errors.client_contact_person_id}
+                                    hint={!data.client_id ? 'Pick a client first to see its contacts.' : undefined}
+                                    action={
+                                        data.client_id && (
+                                            <LinkButton icon={Plus} onClick={() => setShowAddContact((v) => !v)}>
+                                                New contact
+                                            </LinkButton>
+                                        )
+                                    }
+                                >
                                     <select
                                         id="client_contact_person_id"
                                         value={data.client_contact_person_id}
                                         onChange={(e) => updateField('client_contact_person_id', e.target.value)}
-                                        className={fieldClass}
-                                        style={errors.client_contact_person_id ? errorInputStyle : inputStyle}
                                         disabled={!data.client_id}
+                                        className={input(errors.client_contact_person_id)}
                                     >
                                         <option value="" disabled>
                                             {data.client_id ? 'Select a contact person' : 'Select a client first'}
                                         </option>
-                                        {contactOptions.map((person) => (
-                                            <option key={person.id} value={person.id}>{person.contact_person}</option>
+                                        {contactOptions.map((p) => (
+                                            <option key={p.id} value={p.id}>{p.contact_person}</option>
                                         ))}
                                     </select>
-                                    {!data.client_id && (
-                                        <p className="mt-1 flex items-center gap-1 text-xs" style={{ color: PALETTE.slate }}>
-                                            <Info className="h-3 w-3" />
-                                            Pick a client to see its contacts
-                                        </p>
-                                    )}
-                                    {errors.client_contact_person_id && (
-                                        <p className={errorClass}>{errors.client_contact_person_id}</p>
-                                    )}
+                                </Field>
 
-                                    {showAddContact && (
-                                        <div className="mt-2 space-y-2 rounded-md border p-3" style={quickPanelStyle}>
+                                {showAddContact && (
+                                    <div className={quickBox}>
+                                        <div>
                                             <input
                                                 type="text"
                                                 placeholder="Contact person name"
                                                 value={newContact.contact_person}
                                                 onChange={(e) => setNewContact((p) => ({ ...p, contact_person: e.target.value }))}
-                                                className={smallFieldClass}
-                                                style={inputStyle}
+                                                className={input(quickErrors.contact_person)}
                                             />
-                                            {quickErrors.contact_person && <p className={errorClass}>{quickErrors.contact_person[0]}</p>}
-
-                                            <input
-                                                type="tel"
-                                                placeholder="Contact number (optional)"
-                                                value={newContact.contact_number}
-                                                onChange={(e) => setNewContact((p) => ({ ...p, contact_number: e.target.value }))}
-                                                className={smallFieldClass}
-                                                style={inputStyle}
-                                            />
-
-                                            <input
-                                                type="email"
-                                                placeholder="Email (optional)"
-                                                value={newContact.email}
-                                                onChange={(e) => setNewContact((p) => ({ ...p, email: e.target.value }))}
-                                                className={smallFieldClass}
-                                                style={inputStyle}
-                                            />
-
-                                            <div className="flex justify-end gap-2 pt-1">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setShowAddContact(false)}
-                                                    className="text-xs font-semibold"
-                                                    style={{ color: PALETTE.slate }}
-                                                >
-                                                    Cancel
-                                                </button>
-                                                <Button type="button" variant="brand" onClick={submitNewContact} disabled={quickProcessing}>
-                                                    Add Contact
-                                                </Button>
-                                            </div>
+                                            {quickErrors.contact_person && (
+                                                <p className="mt-1 text-xs text-red-600">{quickErrors.contact_person[0]}</p>
+                                            )}
                                         </div>
-                                    )}
-                                </div>
-                            </div>
-                        </Section>
-
-                        <div className="border-t" style={{ borderColor: PALETTE.cream }} />
-
-                        {/* Step 3 — Items */}
-                        <Section
-                            step={3}
-                            icon={Package}
-                            title="Line Items"
-                            description="Add what's included in this transaction. The total updates automatically."
-                        >
-                            <div className="space-y-3">
-                                <div className="flex items-center justify-between">
-                                    <span className="text-xs" style={{ color: PALETTE.slate }}>
-                                        {itemCount} {itemCount === 1 ? 'item' : 'items'}
-                                    </span>
-                                    <button
-                                        type="button"
-                                        onClick={addItem}
-                                        className="flex items-center gap-1 text-xs font-semibold"
-                                        style={{ color: PALETTE.slate }}
-                                    >
-                                        <Plus className="h-3.5 w-3.5" />
-                                        Add Item
-                                    </button>
-                                </div>
-
-                                {errors.items && <p className={errorClass}>{errors.items}</p>}
-
-                                <div className="overflow-hidden rounded-md border" style={{ borderColor: PALETTE.cream }}>
-                                    <div
-                                        className="hidden gap-4 border-b px-4 py-2 sm:grid sm:grid-cols-[2fr_1fr_1fr_1fr_32px]"
-                                        style={{ borderColor: PALETTE.cream, backgroundColor: PALETTE.mist }}
-                                    >
-                                        <span className="text-xs font-semibold uppercase tracking-wide" style={labelStyle}>Item</span>
-                                        <span className="text-xs font-semibold uppercase tracking-wide" style={labelStyle}>Qty</span>
-                                        <span className="text-xs font-semibold uppercase tracking-wide" style={labelStyle}>Unit Price</span>
-                                        <span className="text-right text-xs font-semibold uppercase tracking-wide" style={labelStyle}>Subtotal</span>
-                                        <span />
-                                    </div>
-
-                                    <div className="divide-y" style={{ borderColor: PALETTE.cream }}>
-                                        {items.map((item, index) => {
-                                            const lineTotal = (Number(item.quantity) || 0) * (Number(item.unit_price) || 0);
-                                            return (
-                                                <div
-                                                    key={index}
-                                                    className="grid grid-cols-1 gap-3 px-4 py-3 sm:grid-cols-[2fr_1fr_1fr_1fr_32px] sm:items-start"
-                                                >
-                                                    <div>
-                                                        <label className={`${labelClass} sm:hidden`} style={labelStyle}>Item</label>
-                                                        <input
-                                                            type="text"
-                                                            placeholder="e.g. Widget A"
-                                                            value={item.item_name}
-                                                            onChange={(e) => updateItem(index, 'item_name', e.target.value)}
-                                                            className={`${fieldClass} sm:mt-0`}
-                                                            style={errors[`items.${index}.item_name`] ? errorInputStyle : inputStyle}
-                                                        />
-                                                        {errors[`items.${index}.item_name`] && (
-                                                            <p className={errorClass}>{errors[`items.${index}.item_name`]}</p>
-                                                        )}
-                                                    </div>
-
-                                                    <div>
-                                                        <label className={`${labelClass} sm:hidden`} style={labelStyle}>Qty</label>
-                                                        <input
-                                                            type="number"
-                                                            min="1"
-                                                            step="1"
-                                                            value={item.quantity}
-                                                            onChange={(e) => updateItem(index, 'quantity', e.target.value)}
-                                                            className={`${fieldClass} sm:mt-0`}
-                                                            style={errors[`items.${index}.quantity`] ? errorInputStyle : inputStyle}
-                                                        />
-                                                        {errors[`items.${index}.quantity`] && (
-                                                            <p className={errorClass}>{errors[`items.${index}.quantity`]}</p>
-                                                        )}
-                                                    </div>
-
-                                                    <div>
-                                                        <label className={`${labelClass} sm:hidden`} style={labelStyle}>Unit Price</label>
-                                                        <input
-                                                            type="number"
-                                                            min="0"
-                                                            step="0.01"
-                                                            placeholder="0.00"
-                                                            value={item.unit_price}
-                                                            onChange={(e) => updateItem(index, 'unit_price', e.target.value)}
-                                                            className={`${fieldClass} sm:mt-0`}
-                                                            style={errors[`items.${index}.unit_price`] ? errorInputStyle : inputStyle}
-                                                        />
-                                                        {errors[`items.${index}.unit_price`] && (
-                                                            <p className={errorClass}>{errors[`items.${index}.unit_price`]}</p>
-                                                        )}
-                                                    </div>
-
-                                                    <div>
-                                                        <label className={`${labelClass} sm:hidden`} style={labelStyle}>Subtotal</label>
-                                                        <div
-                                                            className={`${fieldClass} sm:mt-0 bg-gray-50 text-right font-semibold`}
-                                                            style={{ ...inputStyle, color: PALETTE.deepEdge }}
-                                                        >
-                                                            {currency(lineTotal)}
-                                                        </div>
-                                                    </div>
-
-                                                    <div className="flex justify-end sm:pt-2">
-                                                        {items.length > 1 && (
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => removeItem(index)}
-                                                                style={{ color: PALETTE.slate }}
-                                                                aria-label="Remove item"
-                                                            >
-                                                                <Trash2 className="h-4 w-4" />
-                                                            </button>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-
-                                    <div
-                                        className="flex items-center justify-end gap-2 border-t px-4 py-3"
-                                        style={{ borderColor: PALETTE.cream, backgroundColor: PALETTE.mist }}
-                                    >
-                                        <Banknote className="h-4 w-4" style={{ color: PALETTE.slate }} />
-                                        <span className="text-sm font-semibold" style={{ color: PALETTE.slate }}>Total:</span>
-                                        <span className="text-base font-bold" style={{ color: PALETTE.deepEdge }}>
-                                            {currency(total)}
-                                        </span>
-                                    </div>
-                                </div>
-                            </div>
-                        </Section>
-
-                        <div className="border-t" style={{ borderColor: PALETTE.cream }} />
-
-                        {/* Step 4 — Extra details */}
-                        <Section
-                            step={4}
-                            icon={StickyNote}
-                            title="Additional Details"
-                            description="Optional context — a note for your team, or why this deal was won."
-                        >
-                            <div className="space-y-4">
-                                <div>
-                                    <label htmlFor="note" className={labelClass} style={labelStyle}>
-                                        Note
-                                    </label>
-                                    <textarea
-                                        id="note"
-                                        rows={3}
-                                        placeholder="Anything else worth noting..."
-                                        value={data.note}
-                                        onChange={(e) => updateField('note', e.target.value)}
-                                        className={`${fieldClass} resize-y overflow-y-auto`}
-                                        style={{ ...(errors.note ? errorInputStyle : inputStyle), maxHeight: '160px' }}
-                                    />
-                                    {errors.note && <p className={errorClass}>{errors.note}</p>}
-                                </div>
-
-                                {showWinningMessage ? (
-                                    <div
-                                        className="rounded-md border p-3"
-                                        style={{ borderColor: PALETTE.cream, backgroundColor: PALETTE.mist }}
-                                    >
-                                        <div className="flex items-center justify-between">
-                                            <label htmlFor="winning_message" className={labelClass} style={labelStyle}>
-                                                <Trophy className="h-3.5 w-3.5" />
-                                                Winning Message
-                                            </label>
-                                            <button
-                                                type="button"
-                                                onClick={() => {
-                                                    setShowWinningMessage(false);
-                                                    updateField('winning_message', '');
-                                                }}
-                                                className="flex items-center gap-1 text-xs font-semibold"
-                                                style={{ color: PALETTE.slate }}
-                                            >
-                                                <X className="h-3.5 w-3.5" />
-                                                Remove
-                                            </button>
-                                        </div>
-                                        <textarea
-                                            id="winning_message"
-                                            rows={2}
-                                            placeholder="Why did this deal win?"
-                                            value={data.winning_message}
-                                            onChange={(e) => updateField('winning_message', e.target.value)}
-                                            className={`${fieldClass} bg-white resize-y overflow-y-auto`}
-                                            style={{
-                                                ...(errors.winning_message ? errorInputStyle : inputStyle),
-                                                maxHeight: '160px',
-                                            }}
+                                        <input
+                                            type="tel"
+                                            placeholder="Contact number (optional)"
+                                            value={newContact.contact_number}
+                                            onChange={(e) => setNewContact((p) => ({ ...p, contact_number: e.target.value }))}
+                                            className={inputCls}
                                         />
-                                        {errors.winning_message && <p className={errorClass}>{errors.winning_message}</p>}
+                                        <input
+                                            type="email"
+                                            placeholder="Email (optional)"
+                                            value={newContact.email}
+                                            onChange={(e) => setNewContact((p) => ({ ...p, email: e.target.value }))}
+                                            className={inputCls}
+                                        />
+                                        <div className="flex justify-end gap-2 pt-1">
+                                            <Button type="button" variant="outline" onClick={() => setShowAddContact(false)}>Cancel</Button>
+                                            <Button type="button" variant="brand" onClick={submitNewContact} disabled={quickProcessing}>
+                                                Add contact
+                                            </Button>
+                                        </div>
                                     </div>
-                                ) : (
-                                    <button
-                                        type="button"
-                                        onClick={() => setShowWinningMessage(true)}
-                                        className="flex items-center gap-1.5 text-xs font-semibold"
-                                        style={{ color: PALETTE.slate }}
-                                    >
-                                        <Plus className="h-3.5 w-3.5" />
-                                        Add custom field (Winning Message)
-                                    </button>
                                 )}
                             </div>
-                        </Section>
-                    </div>
-
-                    <div className="mt-8 flex items-center justify-between border-t pt-4" style={{ borderColor: PALETTE.cream }}>
-                        {hasBlockingErrors ? (
-                            <p className="text-xs font-semibold text-red-600">
-                                Please fix the highlighted fields before saving.
-                            </p>
-                        ) : (
-                            <span />
-                        )}
-                        <div className="flex gap-2">
-                            <Link href={route('transactions.index')}>
-                                <Button type="button" variant="outline">Cancel</Button>
-                            </Link>
-                            <Button type="submit" variant="brand" disabled={processing}>
-                                {isEditing ? 'Update' : 'Save'}
-                            </Button>
                         </div>
-                    </div>
+                    </Panel>
+
+                    <Panel
+                        title="Line items"
+                        description={
+                            itemsLocked
+                                ? 'Locked because deliveries have been recorded.'
+                                : 'Pick an item, brand and variant. The price fills in automatically.'
+                        }
+                        icon={Package}
+                        bodyClass="p-0"
+                        actions={
+                            !itemsLocked && (
+                                <>
+                                    <select
+                                        aria-label="Filter items by category"
+                                        value={categoryFilter}
+                                        onChange={(e) => setCategoryFilter(e.target.value)}
+                                        className={cx(inputCls, 'h-8 w-44 text-[13px]')}
+                                    >
+                                        <option value="">All categories</option>
+                                        {categories.map((c) => (
+                                            <option key={c.id} value={c.id}>{c.category_name}</option>
+                                        ))}
+                                    </select>
+                                    <Button type="button" variant="outline" onClick={addItem}>
+                                        <Plus />
+                                        Add item
+                                    </Button>
+                                </>
+                            )
+                        }
+                    >
+                        {itemsLocked && (
+                            <div className="p-4 pb-0">
+                                <Banner tone="warning" icon={Lock} title={`Items are locked (${orderedDelivered} of ${orderedTotal} delivered)`}>
+                                    Items, quantities and prices can't change once goods are delivered, because that would break the
+                                    delivery and stock records. You can still edit the client, priority and notes. If the order really
+                                    changed, mark this deal as lost and create a new transaction.
+                                </Banner>
+                            </div>
+                        )}
+
+                        {catalog.length === 0 && !itemsLocked && (
+                            <p className="px-5 py-4 text-sm text-slate-500">
+                                No items in the catalog yet.{' '}
+                                <Link href={route('items.create')} className="font-medium text-[#667292] underline">
+                                    Create one first
+                                </Link>
+                            </p>
+                        )}
+
+                        {typeof errors.items === 'string' && <p className="px-5 pt-3 text-xs text-red-600">{errors.items}</p>}
+
+                        {/* Column headers (desktop) */}
+                        <div className={cx('mt-4 hidden gap-3 border-y border-slate-100 bg-slate-50 px-5 py-2 text-xs font-medium text-slate-500 lg:grid', rowGrid)}>
+                            <span>Item</span>
+                            <span>Brand</span>
+                            <span>Variant</span>
+                            <span>Qty</span>
+                            <span>Unit price</span>
+                            <span className="text-right">Subtotal</span>
+                            <span />
+                        </div>
+
+                        <div className="divide-y divide-slate-100">
+                            {items.map((item, index) => {
+                                const lineTotal = (Number(item.quantity) || 0) * (Number(item.unit_price) || 0);
+                                const selectedVariant = variantFor(item);
+                                const over = !itemsLocked && selectedVariant && Number(item.quantity) > Number(selectedVariant.stock);
+                                const variantError = errors[`items.${index}.item_variant_id`];
+                                const lineDelivered = deliveredAt(index);
+
+                                return (
+                                    <div key={index} className={cx('grid grid-cols-1 gap-3 px-5 py-3.5 lg:items-start', rowGrid)}>
+                                        <div>
+                                            <span className={mobileLabel}>Item</span>
+                                            <select
+                                                value={item.item_id}
+                                                onChange={(e) => changeItem(index, e.target.value)}
+                                                disabled={itemsLocked}
+                                                aria-label="Item"
+                                                className={input(variantError && !item.item_id)}
+                                            >
+                                                <option value="" disabled>Select item</option>
+                                                {itemsFor().map((i) => (
+                                                    <option key={i.id} value={i.id}>{i.item_name}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+
+                                        <div>
+                                            <span className={mobileLabel}>Brand</span>
+                                            <select
+                                                value={item.item_brand_id}
+                                                onChange={(e) => changeBrand(index, e.target.value)}
+                                                disabled={itemsLocked || !item.item_id}
+                                                aria-label="Brand"
+                                                className={input(variantError && item.item_id && !item.item_brand_id)}
+                                            >
+                                                <option value="" disabled>{item.item_id ? 'Select brand' : '—'}</option>
+                                                {brandsFor(item).map((b) => (
+                                                    <option key={b.id} value={b.id}>{b.brand_name}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+
+                                        <div>
+                                            <span className={mobileLabel}>Variant</span>
+                                            <select
+                                                value={item.item_variant_id}
+                                                onChange={(e) => changeVariant(index, e.target.value)}
+                                                disabled={itemsLocked || !item.item_brand_id}
+                                                aria-label="Variant"
+                                                className={input(variantError)}
+                                            >
+                                                <option value="" disabled>{item.item_brand_id ? 'Select variant' : '—'}</option>
+                                                {variantsFor(item).map((v) => (
+                                                    <option key={v.id} value={v.id}>{variantLabel(v)}</option>
+                                                ))}
+                                            </select>
+                                            {variantError && <p className="mt-1 text-xs text-red-600">Select an item, brand and variant.</p>}
+                                            {itemsLocked ? (
+                                                <p className={cx('mt-1 text-xs', lineDelivered >= Number(item.quantity) ? 'text-emerald-600' : 'text-slate-500')}>
+                                                    Delivered {lineDelivered} of {item.quantity}
+                                                </p>
+                                            ) : (
+                                                selectedVariant && (
+                                                    <p className={cx('mt-1 text-xs', over ? 'font-medium text-orange-600' : 'text-slate-500')}>
+                                                        {over ? `Only ${selectedVariant.stock} in stock` : `${selectedVariant.stock} in stock`}
+                                                    </p>
+                                                )
+                                            )}
+                                        </div>
+
+                                        <div>
+                                            <span className={mobileLabel}>Qty</span>
+                                            <input
+                                                type="number"
+                                                min="1"
+                                                step="1"
+                                                value={item.quantity}
+                                                onChange={(e) => updateItem(index, 'quantity', e.target.value)}
+                                                disabled={itemsLocked}
+                                                aria-label="Quantity"
+                                                className={input(errors[`items.${index}.quantity`])}
+                                            />
+                                            {errors[`items.${index}.quantity`] && (
+                                                <p className="mt-1 text-xs text-red-600">{errors[`items.${index}.quantity`]}</p>
+                                            )}
+                                        </div>
+
+                                        <div>
+                                            <span className={mobileLabel}>Unit price</span>
+                                            <input
+                                                type="number"
+                                                min="0"
+                                                step="0.01"
+                                                placeholder="0.00"
+                                                value={item.unit_price}
+                                                onChange={(e) => updateItem(index, 'unit_price', e.target.value)}
+                                                disabled={itemsLocked}
+                                                aria-label="Unit price"
+                                                className={input(errors[`items.${index}.unit_price`])}
+                                            />
+                                            {errors[`items.${index}.unit_price`] && (
+                                                <p className="mt-1 text-xs text-red-600">{errors[`items.${index}.unit_price`]}</p>
+                                            )}
+                                        </div>
+
+                                        <div className="flex items-center justify-between lg:h-9 lg:justify-end">
+                                            <span className={cx(mobileLabel, 'mb-0')}>Subtotal</span>
+                                            <span className="text-sm font-semibold tabular-nums text-slate-900">{currency(lineTotal)}</span>
+                                        </div>
+
+                                        <div className="flex justify-end lg:h-9 lg:items-center">
+                                            {itemsLocked ? (
+                                                <Lock className="h-4 w-4 text-slate-300" aria-label="Locked" />
+                                            ) : (
+                                                items.length > 1 && <IconButton icon={Trash2} label="Remove item" danger onClick={() => removeItem(index)} />
+                                            )}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+
+                        <div className="flex items-center justify-end gap-3 border-t border-slate-100 bg-slate-50 px-5 py-3 text-sm">
+                            <span className="text-slate-500">Total</span>
+                            <span className="text-base font-semibold tabular-nums text-slate-900">{currency(total)}</span>
+                        </div>
+                    </Panel>
+
+                    <Panel title="Notes" description="Optional context for your team." icon={StickyNote}>
+                        <div className="space-y-4">
+                            <Field label="Note" htmlFor="note" error={errors.note}>
+                                <textarea
+                                    id="note"
+                                    rows={3}
+                                    placeholder="Anything else worth noting…"
+                                    value={data.note}
+                                    onChange={(e) => updateField('note', e.target.value)}
+                                    className={textareaCls(errors.note)}
+                                />
+                            </Field>
+
+                            {showWinningMessage ? (
+                                <Field
+                                    label="Winning message"
+                                    htmlFor="winning_message"
+                                    error={errors.winning_message}
+                                    hint="Shown on the celebration screen when this deal is won."
+                                    action={
+                                        <LinkButton
+                                            icon={X}
+                                            onClick={() => {
+                                                setShowWinningMessage(false);
+                                                updateField('winning_message', '');
+                                            }}
+                                        >
+                                            Remove
+                                        </LinkButton>
+                                    }
+                                >
+                                    <textarea
+                                        id="winning_message"
+                                        rows={2}
+                                        placeholder="Why did this deal win?"
+                                        value={data.winning_message}
+                                        onChange={(e) => updateField('winning_message', e.target.value)}
+                                        className={textareaCls(errors.winning_message)}
+                                    />
+                                </Field>
+                            ) : (
+                                <LinkButton icon={Trophy} onClick={() => setShowWinningMessage(true)}>
+                                    Add a winning message
+                                </LinkButton>
+                            )}
+                        </div>
+                    </Panel>
                 </div>
+
+                {/* ---------------- Sticky summary ---------------- */}
+                <aside className="xl:sticky xl:top-20">
+                    <Panel title={isEditing ? 'Edit transaction' : 'New transaction'} description="Review, then save.">
+                        <dl className="space-y-3">
+                            <SummaryLine label="Client">{selectedClient?.client_name ?? '—'}</SummaryLine>
+                            <SummaryLine label="Contact">
+                                <span className="inline-flex items-center gap-1">
+                                    {selectedContact && <UserRound className="h-3.5 w-3.5 text-slate-400" />}
+                                    {selectedContact?.contact_person ?? '—'}
+                                </span>
+                            </SummaryLine>
+                            <SummaryLine label="Priority">
+                                <PriorityPill value={data.priority} />
+                            </SummaryLine>
+                            <SummaryLine label="Line items">{items.length}</SummaryLine>
+                        </dl>
+
+                        <div className="mt-4 flex items-baseline justify-between border-t border-slate-100 pt-4">
+                            <span className="text-sm text-slate-500">Total</span>
+                            <span className="text-2xl font-semibold tabular-nums tracking-tight text-slate-900">{currency(total)}</span>
+                        </div>
+
+                        <div className="mt-4 space-y-2">
+                            {shortages.length > 0 && (
+                                <Banner tone="warning" title="Not enough stock yet">
+                                    {shortages.length} {shortages.length === 1 ? 'variant is' : 'variants are'} short. You can still save, but
+                                    you won't be able to deliver until it's restocked.
+                                </Banner>
+                            )}
+                            {hasErrors && <Banner tone="error">Fix the highlighted fields before saving.</Banner>}
+                        </div>
+
+                        <div className="mt-5 flex flex-col gap-2">
+                            <Button type="submit" variant="brand" className="w-full" disabled={processing}>
+                                {processing ? 'Saving…' : isEditing ? 'Save changes' : 'Create transaction'}
+                            </Button>
+                            <Link href={listUrl} className="block">
+                                <Button type="button" variant="outline" className="w-full">Cancel</Button>
+                            </Link>
+                        </div>
+                    </Panel>
+                </aside>
+            </div>
         </form>
     );
 }

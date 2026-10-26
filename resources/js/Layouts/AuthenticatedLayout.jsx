@@ -1,418 +1,231 @@
 import { Link, usePage } from '@inertiajs/react';
 import { useState } from 'react';
 import {
+    Building2,
+    ClipboardList,
+    FileText,
+    GitBranch,
     LayoutGrid,
-    Menu,
-    X,
-    User,
     LogOut,
+    Menu,
+    Package,
+    PackagePlus,
     PanelLeftClose,
     PanelLeftOpen,
-    Bell,
-    Search,
-    GitBranch,
+    Receipt,
+    ScrollText,
+    Tags,
+    User,
+    X,
 } from 'lucide-react';
 
-const navItems = [
-    { name: 'Dashboard', route: 'dashboard.index', icon: LayoutGrid },
-    { name: 'Transactions', route: 'transactions.index', icon: LayoutGrid },
-    { name: 'Pipelines', route: 'pipelines.index', icon: GitBranch },
-    { name: 'Clients', route: 'clients.index', icon: LayoutGrid },
+const LOGO_URL = '/images/flowcore-logo.png';
+const STORAGE_KEY = 'flowcore:sidebar-collapsed';
+
+const navGroups = [
+    {
+        label: 'Workspace',
+        items: [
+            { name: 'Dashboard', route: 'dashboard.index', icon: LayoutGrid },
+            { name: 'Quotations', route: 'quotations.index', icon: FileText },
+            { name: 'Client POs', route: 'client-purchase-orders.index', icon: ClipboardList },
+            { name: 'Transactions', route: 'transactions.index', icon: Receipt },
+            { name: 'Pipelines', route: 'pipelines.index', icon: GitBranch },
+            { name: 'Clients', route: 'clients.index', icon: Building2 },
+        ],
+    },
+    {
+        label: 'Inventory',
+        items: [
+            { name: 'Items', route: 'items.index', icon: Package },
+            { name: 'Categories', route: 'categories.index', icon: Tags },
+            { name: 'Stock in', route: 'stock-in.index', icon: PackagePlus },
+            { name: 'Stock ledger', route: 'stock-movements.index', icon: ScrollText },
+        ],
+    },
 ];
 
-const LOGO_URL = '/images/flowcore-logo.png';
-
-// Same token system as the login page — keep these two files in sync.
-// Source hexes: #bccad6 / #8d9db6 / #667292 / #f1e3dd
-// `deep`/`deepEdge` are derived (not in the original 4) for sidebar depth.
-const PALETTE = {
-    mint: '#f1e3dd',
-    teal: '#8d9db6',
-    cream: '#bccad6',
-    slate: '#667292',
-    deep: '#262b3d',
-    deepEdge: '#3a4157',
-};
+const cx = (...a) => a.filter(Boolean).join(' ');
 
 function SidebarContent({ user, onNavigate, collapsed = false }) {
     return (
-        <div
-            className="relative flex h-full flex-col overflow-hidden"
-            style={{
-                // A saturated navy base (not black→gray) so PALETTE.teal/slate
-                // actually punch through instead of reading as charcoal.
-                background: `linear-gradient(180deg, #0c1626 0%, #16233a 45%, #1b2b45 100%)`,
-                color: `${PALETTE.mint}cc`,
-            }}
-        >
-            {/* Same ambient texture as the login page's dark panel */}
-            <div
-                className="pointer-events-none absolute inset-0 opacity-[0.08] [background-image:linear-gradient(to_right,rgba(255,255,255,0.09)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,0.09)_1px,transparent_1px)] [background-size:40px_40px]"
-                aria-hidden="true"
-            />
-            {/* Large, vivid glow orbs at higher opacity — this is what makes
-                the panel read as "blue" rather than "dark". */}
-            <div
-                className="pointer-events-none absolute -top-20 -left-24 h-80 w-80 rounded-full blur-3xl"
-                style={{ backgroundColor: `${PALETTE.teal}66` }}
-                aria-hidden="true"
-            />
-            <div
-                className="pointer-events-none absolute top-1/3 -right-28 h-96 w-96 rounded-full blur-3xl"
-                style={{ backgroundColor: `${PALETTE.slate}55` }}
-                aria-hidden="true"
-            />
-            <div
-                className="pointer-events-none absolute bottom-0 left-0 h-64 w-64 rounded-full blur-3xl"
-                style={{ backgroundColor: `${PALETTE.teal}4d` }}
-                aria-hidden="true"
-            />
-            <div
-                className="pointer-events-none absolute top-0 left-0 right-0 h-px"
-                style={{ background: `linear-gradient(to right, transparent, ${PALETTE.teal}, transparent)` }}
-            />
-            <div
-                className="pointer-events-none absolute inset-y-0 right-0 w-px"
-                style={{ background: `linear-gradient(180deg, transparent, ${PALETTE.teal}66, transparent)` }}
-                aria-hidden="true"
-            />
-
+        <div className="flex h-full flex-col bg-[#0f1a2e] text-slate-300">
             {/* Brand */}
-            <div
-                className={[
-                    'relative z-10 flex h-16 shrink-0 items-center',
-                    collapsed ? 'justify-center px-3' : 'gap-2.5 px-5',
-                ].join(' ')}
-                style={{ borderBottom: `1px solid ${PALETTE.deepEdge}` }}
-            >
-                <Link href="/" className="flex items-center gap-2.5 overflow-hidden" onClick={onNavigate}>
-                    <img
-                        src={LOGO_URL}
-                        alt="FlowCore"
-                        className="h-7 w-7 shrink-0 object-contain"
-                        style={{ filter: `drop-shadow(0 2px 8px ${PALETTE.teal}99)` }}
-                    />
-                    {!collapsed && (
-                        <span className="whitespace-nowrap text-[15px] font-semibold tracking-tight" style={{ color: PALETTE.mint }}>
-                            FlowCore
-                        </span>
-                    )}
+            <div className={cx('flex h-14 shrink-0 items-center border-b border-white/10', collapsed ? 'justify-center' : 'px-5')}>
+                <Link href="/" onClick={onNavigate} className="flex items-center gap-2.5 overflow-hidden">
+                    <img src={LOGO_URL} alt="FlowCore" className="h-7 w-7 shrink-0 object-contain" />
+                    {!collapsed && <span className="text-[15px] font-semibold tracking-tight text-white">FlowCoreS</span>}
                 </Link>
             </div>
 
             {/* Nav */}
-            <nav className="relative z-10 flex-1 space-y-0.5 overflow-y-auto overflow-x-hidden px-3 py-5">
-                {!collapsed && (
-                    <p
-                        className="px-3 pb-2 text-[10.5px] font-semibold uppercase tracking-wider"
-                        style={{ color: `${PALETTE.mint}59` }}
-                    >
-                        Main
-                    </p>
-                )}
-                {navItems.map((item) => {
-                    const active = route().current(item.route);
-                    const Icon = item.icon;
-                    return (
-                        <Link
-                            key={item.name}
-                            href={route(item.route)}
-                            onClick={onNavigate}
-                            title={collapsed ? item.name : undefined}
-                            className={[
-                                'group relative flex items-center rounded-lg text-sm font-medium transition-all duration-150',
-                                collapsed ? 'justify-center px-0 py-2.5' : 'gap-3 px-3 py-2.5',
-                            ].join(' ')}
-                            style={{
-                                backgroundColor: active ? `${PALETTE.teal}26` : 'transparent',
-                                color: active ? PALETTE.mint : `${PALETTE.mint}80`,
-                                boxShadow: active ? `inset 0 0 0 1px ${PALETTE.teal}40` : 'none',
-                            }}
-                            onMouseEnter={(e) => {
-                                if (!active) {
-                                    e.currentTarget.style.backgroundColor = `${PALETTE.deepEdge}66`;
-                                    e.currentTarget.style.color = PALETTE.mint;
-                                }
-                            }}
-                            onMouseLeave={(e) => {
-                                if (!active) {
-                                    e.currentTarget.style.backgroundColor = 'transparent';
-                                    e.currentTarget.style.color = `${PALETTE.mint}80`;
-                                }
-                            }}
-                        >
-                            {active && (
-                                <span
-                                    className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full"
-                                    style={{
-                                        background: `linear-gradient(to bottom, ${PALETTE.teal}, ${PALETTE.slate})`,
-                                        boxShadow: `0 0 10px ${PALETTE.teal}`,
-                                    }}
-                                />
-                            )}
-                            <span
-                                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors"
-                                style={{
-                                    background: active
-                                        ? `linear-gradient(to bottom right, ${PALETTE.teal}40, ${PALETTE.slate}1a)`
-                                        : undefined,
-                                }}
-                            >
-                                <Icon
-                                    className="h-[17px] w-[17px] shrink-0"
-                                    style={{ color: active ? PALETTE.teal : `${PALETTE.mint}66` }}
-                                />
-                            </span>
-                            {!collapsed && <span className="truncate">{item.name}</span>}
-                        </Link>
-                    );
-                })}
+            <nav className="flex-1 overflow-y-auto overflow-x-hidden px-3 py-4 [scrollbar-width:thin]">
+                {navGroups.map((group, gi) => (
+                    <div key={group.label} className={cx(gi > 0 && 'mt-6')}>
+                        {collapsed ? (
+                            gi > 0 && <div className="mx-3 mb-3 h-px bg-white/10" />
+                        ) : (
+                            <p className="mb-1.5 px-3 text-xs font-medium text-slate-500">{group.label}</p>
+                        )}
+                        <ul className="space-y-0.5">
+                            {group.items.map((item) => {
+                                const active =
+                                    route().current(item.route) || route().current(item.route.replace('.index', '.*'));
+                                const Icon = item.icon;
+                                return (
+                                    <li key={item.name}>
+                                        <Link
+                                            href={route(item.route)}
+                                            onClick={onNavigate}
+                                            title={collapsed ? item.name : undefined}
+                                            aria-label={collapsed ? item.name : undefined}
+                                            aria-current={active ? 'page' : undefined}
+                                            className={cx(
+                                                'relative flex items-center rounded-lg text-sm font-medium transition-colors',
+                                                'focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8d9db6]',
+                                                collapsed ? 'h-10 justify-center' : 'h-9 gap-3 px-3',
+                                                active
+                                                    ? 'bg-white/10 text-white'
+                                                    : 'text-slate-400 hover:bg-white/5 hover:text-white',
+                                            )}
+                                        >
+                                            {active && (
+                                                <span className="absolute -left-3 top-2 bottom-2 w-[3px] rounded-r-full bg-[#8d9db6]" />
+                                            )}
+                                            <Icon className={cx('h-[18px] w-[18px] shrink-0', active && 'text-[#a9b8d0]')} />
+                                            {!collapsed && <span className="truncate">{item.name}</span>}
+                                        </Link>
+                                    </li>
+                                );
+                            })}
+                        </ul>
+                    </div>
+                ))}
             </nav>
 
-            {/* User footer */}
-            <div className="relative z-10 p-3" style={{ borderTop: `1px solid ${PALETTE.deepEdge}` }}>
-                <div
-                    className={[
-                        'flex items-center rounded-lg py-2',
-                        collapsed ? 'justify-center px-0' : 'gap-3 px-2.5',
-                    ].join(' ')}
-                >
-                    <span
-                        className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white"
-                        style={{
-                            background: `linear-gradient(to bottom right, ${PALETTE.teal}, ${PALETTE.slate})`,
-                            boxShadow: `0 0 0 2px ${PALETTE.deepEdge}`,
-                        }}
+            {/* User */}
+            <div className="shrink-0 border-t border-white/10 p-3">
+                <div className={cx('flex items-center', collapsed ? 'flex-col gap-2' : 'gap-3 px-1')}>
+                    <Link
+                        href={route('profile.edit')}
+                        onClick={onNavigate}
+                        title={collapsed ? `${user.name} · Profile` : 'Profile'}
+                        className="flex min-w-0 flex-1 items-center gap-3 rounded-lg p-1.5 transition-colors hover:bg-white/5"
                     >
-                        {user.name?.charAt(0)?.toUpperCase()}
-                        <span
-                            className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full"
-                            style={{ backgroundColor: '#5fb98c', boxShadow: `0 0 0 2px ${PALETTE.deep}` }}
-                        />
-                    </span>
-                    {!collapsed && (
-                        <span className="min-w-0 flex-1">
-                            <span className="block truncate text-sm font-medium" style={{ color: PALETTE.mint }}>
-                                {user.name}
-                            </span>
-                            <span className="block truncate text-xs" style={{ color: `${PALETTE.mint}59` }}>
-                                {user.email}
-                            </span>
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#667292] text-xs font-semibold text-white">
+                            {user.name?.charAt(0)?.toUpperCase() ?? <User className="h-4 w-4" />}
                         </span>
-                    )}
+                        {!collapsed && (
+                            <span className="min-w-0">
+                                <span className="block truncate text-sm font-medium leading-tight text-white">{user.name}</span>
+                                <span className="block truncate text-xs text-slate-500">{user.email}</span>
+                            </span>
+                        )}
+                    </Link>
+                    <Link
+                        href={route('logout')}
+                        method="post"
+                        as="button"
+                        aria-label="Log out"
+                        title="Log out"
+                        className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-red-500/15 hover:text-red-300"
+                    >
+                        <LogOut className="h-4 w-4" />
+                    </Link>
                 </div>
-
-                {!collapsed && (
-                    <div className="mt-1.5 grid grid-cols-2 gap-1.5">
-                        <Link
-                            href={route('profile.edit')}
-                            onClick={onNavigate}
-                            className="flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium text-white transition-all"
-                            style={{
-                                background: `linear-gradient(to bottom, ${PALETTE.teal}, ${PALETTE.slate})`,
-                                boxShadow: `0 2px 0 0 ${PALETTE.deepEdge}`,
-                            }}
-                        >
-                            <User className="h-3.5 w-3.5" />
-                            Profile
-                        </Link>
-                        <Link
-                            href={route('logout')}
-                            method="post"
-                            as="button"
-                            className="flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium transition-colors"
-                            style={{ border: `1px solid ${PALETTE.deepEdge}`, color: `${PALETTE.mint}80` }}
-                            onMouseEnter={(e) => {
-                                e.currentTarget.style.borderColor = '#8a4a4a';
-                                e.currentTarget.style.backgroundColor = 'rgba(127,29,29,0.25)';
-                                e.currentTarget.style.color = '#f3b8b8';
-                            }}
-                            onMouseLeave={(e) => {
-                                e.currentTarget.style.borderColor = PALETTE.deepEdge;
-                                e.currentTarget.style.backgroundColor = 'transparent';
-                                e.currentTarget.style.color = `${PALETTE.mint}80`;
-                            }}
-                        >
-                            <LogOut className="h-3.5 w-3.5" />
-                            Log Out
-                        </Link>
-                    </div>
-                )}
             </div>
         </div>
     );
 }
 
 /**
- * `fullWidth` (default true): the page area is edge to edge with no padding
- * and no max-width, and stretches to fill the viewport height so children
- * like <PageCard> can fill it.
- * `fullWidth={false}`: the old padded, centered `max-w-7xl` container.
+ * `fullWidth` (default true): content is edge to edge with no padding, so cards and forms control their own spacing.
+ * `fullWidth={false}`: padded, centered container.
  */
 export default function AuthenticatedLayout({ header, children, fullWidth = true }) {
     const user = usePage().props.auth.user;
     const [mobileOpen, setMobileOpen] = useState(false);
-    const [collapsed, setCollapsed] = useState(false);
+    const [collapsed, setCollapsed] = useState(() => {
+        try {
+            return localStorage.getItem(STORAGE_KEY) === '1';
+        } catch {
+            return false;
+        }
+    });
+
+    const toggleCollapsed = () =>
+        setCollapsed((c) => {
+            const next = !c;
+            try {
+                localStorage.setItem(STORAGE_KEY, next ? '1' : '0');
+            } catch {
+                /* storage unavailable */
+            }
+            return next;
+        });
 
     return (
-        <div className="min-h-screen" style={{ backgroundColor: `${PALETTE.cream}33` }}>
-            {/* Desktop sidebar — fixed */}
+        <div className="min-h-screen bg-slate-50">
+            {/* Desktop sidebar */}
             <aside
-                className={[
-                    'hidden lg:fixed lg:inset-y-0 lg:left-0 lg:z-40 lg:flex lg:flex-col transition-[width] duration-200 ease-in-out',
-                    collapsed ? 'lg:w-[76px]' : 'lg:w-64',
-                ].join(' ')}
-                style={{ borderRight: `1px solid ${PALETTE.deepEdge}` }}
+                className={cx(
+                    'fixed inset-y-0 left-0 z-40 hidden border-r border-white/5 transition-[width] duration-200 ease-in-out lg:block',
+                    collapsed ? 'w-[72px]' : 'w-60',
+                )}
             >
                 <SidebarContent user={user} collapsed={collapsed} />
             </aside>
 
-            {/* Mobile sidebar — slide-over */}
+            {/* Mobile drawer */}
             {mobileOpen && (
                 <div className="fixed inset-0 z-50 lg:hidden">
-                    <div
-                        className="fixed inset-0 backdrop-blur-sm"
-                        style={{ backgroundColor: '#0c1626e6' }}
-                        onClick={() => setMobileOpen(false)}
-                    />
+                    <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm" onClick={() => setMobileOpen(false)} />
                     <div className="fixed inset-y-0 left-0 w-72 shadow-2xl">
-                        <div className="relative flex h-full flex-col">
-                            <button
-                                onClick={() => setMobileOpen(false)}
-                                className="absolute right-3 top-3 z-10 rounded-md p-1.5 transition-colors"
-                                style={{ color: `${PALETTE.mint}80` }}
-                                onMouseEnter={(e) => {
-                                    e.currentTarget.style.backgroundColor = PALETTE.deepEdge;
-                                    e.currentTarget.style.color = PALETTE.mint;
-                                }}
-                                onMouseLeave={(e) => {
-                                    e.currentTarget.style.backgroundColor = 'transparent';
-                                    e.currentTarget.style.color = `${PALETTE.mint}80`;
-                                }}
-                            >
-                                <X className="h-5 w-5" />
-                            </button>
-                            <SidebarContent user={user} onNavigate={() => setMobileOpen(false)} />
-                        </div>
+                        <button
+                            onClick={() => setMobileOpen(false)}
+                            aria-label="Close menu"
+                            className="absolute right-3 top-3 z-10 rounded-md p-1.5 text-slate-400 hover:bg-white/10 hover:text-white"
+                        >
+                            <X className="h-5 w-5" />
+                        </button>
+                        <SidebarContent user={user} onNavigate={() => setMobileOpen(false)} />
                     </div>
                 </div>
             )}
 
-            {/* Main column — a flex column so <main> can stretch to fill the viewport */}
+            {/* Main column */}
             <div
-                className={[
-                    'flex min-h-screen min-w-0 flex-col',
-                    collapsed ? 'lg:pl-[76px]' : 'lg:pl-64',
-                ].join(' ')}
-                style={{ transition: 'padding-left 200ms ease-in-out' }}
+                className={cx(
+                    'flex min-h-screen min-w-0 flex-col transition-[padding] duration-200 ease-in-out',
+                    collapsed ? 'lg:pl-[72px]' : 'lg:pl-60',
+                )}
             >
-                {/* Gradient accent line, same one used at the top of the login form panel */}
-                <div
-                    className="h-[3px] shrink-0"
-                    style={{ background: `linear-gradient(to right, ${PALETTE.slate}, ${PALETTE.teal}, ${PALETTE.slate})` }}
-                    aria-hidden="true"
-                />
-
-                {/* Top bar */}
-                <div
-                    className="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-3 px-4 backdrop-blur-md sm:px-6 lg:px-8"
-                    style={{
-                        borderBottom: `1px solid ${PALETTE.cream}`,
-                        background: `linear-gradient(180deg, ${PALETTE.mint}f2 0%, rgba(255,255,255,0.9) 100%)`,
-                    }}
-                >
+                <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-3 border-b border-slate-200 bg-white/90 px-4 backdrop-blur sm:px-6">
                     <button
                         onClick={() => setMobileOpen(true)}
-                        className="rounded-md p-2 transition-colors lg:hidden"
-                        style={{ color: PALETTE.slate }}
+                        aria-label="Open menu"
+                        className="rounded-md p-2 text-slate-500 transition-colors hover:bg-slate-100 lg:hidden"
                     >
                         <Menu className="h-5 w-5" />
                     </button>
-
                     <button
-                        onClick={() => setCollapsed((c) => !c)}
-                        className="hidden rounded-md p-2 transition-colors lg:flex"
-                        style={{ color: `${PALETTE.slate}99` }}
+                        onClick={toggleCollapsed}
+                        aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
                         title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-                        onMouseEnter={(e) => {
-                            e.currentTarget.style.backgroundColor = `${PALETTE.cream}80`;
-                            e.currentTarget.style.color = PALETTE.slate;
-                        }}
-                        onMouseLeave={(e) => {
-                            e.currentTarget.style.backgroundColor = 'transparent';
-                            e.currentTarget.style.color = `${PALETTE.slate}99`;
-                        }}
+                        className="hidden rounded-md p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 lg:flex"
                     >
-                        {collapsed ? (
-                            <PanelLeftOpen className="h-[18px] w-[18px]" />
-                        ) : (
-                            <PanelLeftClose className="h-[18px] w-[18px]" />
-                        )}
+                        {collapsed ? <PanelLeftOpen className="h-[18px] w-[18px]" /> : <PanelLeftClose className="h-[18px] w-[18px]" />}
                     </button>
+                    <div className="h-5 w-px bg-slate-200" />
+                    <div className="min-w-0 flex-1">{header}</div>
+                </header>
 
-                    <div className="h-6 w-px" style={{ backgroundColor: PALETTE.cream }} />
-
-                    {header ? (
-                        <div className="min-w-0 flex-1">{header}</div>
-                    ) : (
-                        <div className="flex-1" />
-                    )}
-
-                    <div className="hidden items-center gap-1 md:flex">
-                        <button
-                            className="rounded-lg p-2 transition-colors"
-                            style={{ color: `${PALETTE.slate}99` }}
-                            onMouseEnter={(e) => {
-                                e.currentTarget.style.backgroundColor = `${PALETTE.cream}80`;
-                                e.currentTarget.style.color = PALETTE.slate;
-                            }}
-                            onMouseLeave={(e) => {
-                                e.currentTarget.style.backgroundColor = 'transparent';
-                                e.currentTarget.style.color = `${PALETTE.slate}99`;
-                            }}
-                        >
-                            <Search className="h-[18px] w-[18px]" />
-                        </button>
-                        <button
-                            className="relative rounded-lg p-2 transition-colors"
-                            style={{ color: `${PALETTE.slate}99` }}
-                            onMouseEnter={(e) => {
-                                e.currentTarget.style.backgroundColor = `${PALETTE.cream}80`;
-                                e.currentTarget.style.color = PALETTE.slate;
-                            }}
-                            onMouseLeave={(e) => {
-                                e.currentTarget.style.backgroundColor = 'transparent';
-                                e.currentTarget.style.color = `${PALETTE.slate}99`;
-                            }}
-                        >
-                            <Bell className="h-[18px] w-[18px]" />
-                            <span
-                                className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full"
-                                style={{ backgroundColor: PALETTE.teal, boxShadow: '0 0 0 2px white' }}
-                            />
-                        </button>
-                    </div>
-                </div>
-
-                {/* Page content — flex-1 so it fills all remaining height.
-                    fullWidth: no padding, no max-width, edge to edge.
-                    Otherwise: the old padded, centered container. */}
-                <main className="relative flex min-w-0 flex-1 flex-col">
-                    {!fullWidth && (
-                        <div
-                            className="pointer-events-none absolute inset-0 opacity-[0.5]"
-                            style={{
-                                backgroundImage: `radial-gradient(${PALETTE.slate}14 1px, transparent 1px)`,
-                                backgroundSize: '22px 22px',
-                            }}
-                            aria-hidden="true"
-                        />
-                    )}
+                <main className="flex min-w-0 flex-1 flex-col">
                     <div
-                        className={[
-                            'relative flex min-w-0 flex-1 flex-col',
-                            fullWidth ? '' : 'mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8',
-                        ].join(' ')}
+                        className={cx(
+                            'flex min-w-0 flex-1 flex-col',
+                            !fullWidth && 'mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8',
+                        )}
                     >
                         {children}
                     </div>

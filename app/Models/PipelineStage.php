@@ -16,12 +16,20 @@ class PipelineStage extends Model
         'stage_description',
         'sort_order',
         'is_initial',
-        'is_final'
+        'is_final',
+        'deducts_stock',
+        'creates_quotation',
+        'creates_client_po',
+        'partial_return_steps',
     ];
 
     protected $casts = [
-        'is_initial' => 'boolean',
-        'is_final'   => 'boolean',
+        'is_initial'             => 'boolean',
+        'is_final'               => 'boolean',
+        'deducts_stock'          => 'boolean',
+        'creates_quotation'      => 'boolean',
+        'creates_client_po'      => 'boolean',
+        'partial_return_steps'   => 'integer',
     ];
 
     public function pipeline(): BelongsTo
@@ -32,5 +40,10 @@ class PipelineStage extends Model
     public function transactions(): HasMany
     {
         return $this->hasMany(Transaction::class);
+    }
+
+    public function quotations(): HasMany
+    {
+        return $this->hasMany(Quotation::class, 'pipeline_stage_id');
     }
 }
