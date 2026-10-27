@@ -16,16 +16,13 @@ import {
     inputCls,
 } from '@/Components/ui/kit';
 
-// Starter suggestions only. Users can type any unit they like.
-const DEFAULT_UNITS = ['pcs', 'box', 'pack', 'set', 'bag', 'roll', 'pair', 'kg', 'g', 'L', 'mL', 'm', 'cm'];
-
 const emptyVariant = () => ({ id: null, unit_of_measure: 'pcs', size: '', stock: 0 });
 const emptyBrand = () => ({ id: null, brand_name: '', variants: [emptyVariant()] });
 
 const variantGrid = 'sm:grid-cols-[repeat(3,minmax(0,1fr))_32px]';
 const mobileLabel = 'mb-1 block text-xs font-medium text-slate-500 sm:hidden';
 
-export default function ItemForm({ item = null, categories = [], units = [] }) {
+export default function ItemForm({ item = null, categories = [] }) {
     const isEditing = Boolean(item);
 
     const initialData = item
@@ -85,19 +82,6 @@ export default function ItemForm({ item = null, categories = [], units = [] }) {
         return { variantCount: variants.length, stock: variants.reduce((s, v) => s + (Number(v.stock) || 0), 0) };
     }, [brands]);
 
-    // Suggestions for the free-text unit field: defaults + units already saved in the database
-    // + units typed elsewhere in this form. De-duplicated case-insensitively.
-    const unitSuggestions = useMemo(() => {
-        const seen = new Map();
-        [...DEFAULT_UNITS, ...units, ...brands.flatMap((b) => b.variants.map((v) => v.unit_of_measure))]
-            .map((u) => String(u ?? '').trim())
-            .filter(Boolean)
-            .forEach((u) => {
-                if (!seen.has(u.toLowerCase())) seen.set(u.toLowerCase(), u);
-            });
-        return [...seen.values()];
-    }, [units, brands]);
-
     // ---- helpers ----
     const updateField = (field, value) => {
         setData(field, value);
@@ -137,13 +121,6 @@ export default function ItemForm({ item = null, categories = [], units = [] }) {
     return (
         <>
             <form onSubmit={submit} noValidate className="mx-auto w-full max-w-[1680px] p-4 sm:p-6">
-                {/* Shared suggestions for every Unit field */}
-                <datalist id="unit-options">
-                    {unitSuggestions.map((u) => (
-                        <option key={u} value={u} />
-                    ))}
-                </datalist>
-
                 <Link href={listUrl} className="mb-4 inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-slate-900">
                     <ArrowLeft className="h-4 w-4" />
                     Items
@@ -276,11 +253,10 @@ export default function ItemForm({ item = null, categories = [], units = [] }) {
                                                 >
                                                     <div>
                                                         <span className={mobileLabel}>Unit</span>
-                                                        {/* User-defined unit: type anything, or pick a suggestion */}
+                                                        {/* User-defined unit: plain text input, type anything */}
                                                         <input
                                                             aria-label="Unit of measure"
                                                             type="text"
-                                                            list="unit-options"
                                                             maxLength={50}
                                                             autoComplete="off"
                                                             placeholder="e.g. pcs, gallon, sack"
