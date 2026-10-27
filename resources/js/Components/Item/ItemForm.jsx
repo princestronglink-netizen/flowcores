@@ -17,10 +17,10 @@ import {
 
 const UNITS = ['pcs', 'box', 'pack', 'set', 'bag', 'roll', 'pair', 'kg', 'g', 'L', 'mL', 'm', 'cm'];
 
-const emptyVariant = () => ({ id: null, unit_of_measure: 'pcs', size: '', price: '', stock: 0, reorder_level: 0 });
+const emptyVariant = () => ({ id: null, unit_of_measure: 'pcs', size: '', stock: 0 });
 const emptyBrand = () => ({ id: null, brand_name: '', variants: [emptyVariant()] });
 
-const variantGrid = 'sm:grid-cols-[repeat(5,minmax(0,1fr))_32px]';
+const variantGrid = 'sm:grid-cols-[repeat(3,minmax(0,1fr))_32px]';
 const mobileLabel = 'mb-1 block text-xs font-medium text-slate-500 sm:hidden';
 
 export default function ItemForm({ item = null, categories = [] }) {
@@ -42,9 +42,8 @@ export default function ItemForm({ item = null, categories = [] }) {
                                           id: v.id,
                                           unit_of_measure: v.unit_of_measure ?? 'pcs',
                                           size: v.size ?? '',
-                                          price: v.price ?? '',
                                           stock: v.stock ?? 0,
-                                          reorder_level: v.reorder_level ?? 0,
+                                          moq: v.moq ?? 0, // display only: total ordered in the last 30 days, computed by the server
                                       }))
                                     : [emptyVariant()],
                         }))
@@ -233,9 +232,7 @@ export default function ItemForm({ item = null, categories = [] }) {
                                     <div className={cx('hidden gap-3 border-b border-slate-100 bg-slate-50 px-5 py-2 text-xs font-medium text-slate-500 sm:grid', variantGrid)}>
                                         <span>Unit</span>
                                         <span>Size</span>
-                                        <span>Price</span>
                                         <span>Stock</span>
-                                        <span>Reorder at</span>
                                         <span />
                                     </div>
 
@@ -278,27 +275,15 @@ export default function ItemForm({ item = null, categories = [] }) {
                                                     </div>
 
                                                     <div>
-                                                        <span className={mobileLabel}>Price</span>
-                                                        <input
-                                                            aria-label="Price"
-                                                            type="number"
-                                                            min="0"
-                                                            step="0.01"
-                                                            placeholder="0.00"
-                                                            value={variant.price}
-                                                            onChange={(e) => updateVariant(b, v, 'price', e.target.value)}
-                                                            className={input(errors[key('price')])}
-                                                        />
-                                                        {errors[key('price')] && <p className="mt-1 text-xs text-red-600">{errors[key('price')]}</p>}
-                                                    </div>
-
-                                                    <div>
                                                         <span className={mobileLabel}>{variant.id ? 'Stock' : 'Opening stock'}</span>
                                                         {variant.id ? (
                                                             // Saved variants: change stock via Stock in / Stock out so every change is logged.
-                                                            <div className="flex h-9 items-center rounded-md border border-slate-200 bg-slate-50 px-3 text-sm font-semibold tabular-nums text-slate-900">
-                                                                {variant.stock}
-                                                            </div>
+                                                            <>
+                                                                <div className="flex h-9 items-center rounded-md border border-slate-200 bg-slate-50 px-3 text-sm font-semibold tabular-nums text-slate-900">
+                                                                    {variant.stock}
+                                                                </div>
+                                                                <p className="mt-1 text-xs text-slate-500">MOQ {variant.moq} (30 days)</p>
+                                                            </>
                                                         ) : (
                                                             <input
                                                                 aria-label="Opening stock"
@@ -311,21 +296,6 @@ export default function ItemForm({ item = null, categories = [] }) {
                                                             />
                                                         )}
                                                         {errors[key('stock')] && <p className="mt-1 text-xs text-red-600">{errors[key('stock')]}</p>}
-                                                    </div>
-
-                                                    <div>
-                                                        <span className={mobileLabel}>Reorder at</span>
-                                                        <input
-                                                            aria-label="Reorder level"
-                                                            type="number"
-                                                            min="0"
-                                                            step="1"
-                                                            placeholder="0 = off"
-                                                            value={variant.reorder_level}
-                                                            onChange={(e) => updateVariant(b, v, 'reorder_level', e.target.value)}
-                                                            className={input(errors[key('reorder_level')])}
-                                                        />
-                                                        {errors[key('reorder_level')] && <p className="mt-1 text-xs text-red-600">{errors[key('reorder_level')]}</p>}
                                                     </div>
 
                                                     <div className="flex justify-end sm:h-9 sm:items-center">
@@ -375,7 +345,6 @@ export default function ItemForm({ item = null, categories = [] }) {
                     </aside>
                 </div>
             </form>
-
         </>
     );
 }

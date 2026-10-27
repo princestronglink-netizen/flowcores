@@ -13,10 +13,13 @@ class ItemVariant extends Model
     public const STATUS_LOW = 'low';
     public const STATUS_OK  = 'ok';
 
-    protected $fillable = ['item_brand_id', 'unit_of_measure', 'size', 'price', 'stock', 'reorder_level'];
+    /** Rolling window (in days) used to measure demand. */
+    public const DEMAND_DAYS = 30;
+
+    protected $fillable = ['item_brand_id', 'unit_of_measure', 'size', 'stock'];
 
     /** Sent to the frontend with every variant, so badges need no extra queries. */
-    protected $appends = ['stock_status'];
+    protected $appends = ['stock_status', 'demand', 'moq'];
 
     public function brand(): BelongsTo
     {
@@ -28,7 +31,39 @@ class ItemVariant extends Model
         return $this->hasMany(StockMovement::class);
     }
 
-    /** out = 0 units · low = at or below the reorder level · ok = otherwise. */
+    /**
+     * Attach "demand" = total quantity ordered in the last 30 days
+     * (all transactions created in the window, except lost ones).
+     * Use it like: ItemVariant::withDemand()  or  ->with(['brands.variants' => fn ($q) => $q->withDemand()])
+     */
+    public function scopeWithDemand($query)
+    {
+        return $query->select('item_variants.*')->addSelect([
+            'demand' => TransactionItem::query()
+                ->selectRaw('COALESCE(SUM(transaction_items.quantity), 0)')
+                ->whereColumn('transaction_items.item_variant_id', 'item_variants.id')
+                ->whereIn(
+                    'transaction_items.transaction_id',
+                    Transaction::select('id')
+                        ->where('status', '!=', 'lost')
+                        ->where('created_at', '>=', now()->subDays(self::DEMAND_DAYS))
+                ),
+        ]);
+    }
+
+    /** Total quantity ordered in the last 30 days (0 if loaded without withDemand()). */
+    public function getDemandAttribute(): int
+    {
+        return max(0, (int) ($this->attributes['demand'] ?? 0));
+    }
+
+    /** MOQ = the 30-day demand. */
+    public function getMoqAttribute(): int
+    {
+        return $this->demand;
+    }
+
+    /** out = 0 units · low = stock is below the 30-day demand · ok = otherwise. */
     public function getStockStatusAttribute(): string
     {
         $stock = (int) $this->stock;
@@ -37,7 +72,7 @@ class ItemVariant extends Model
             return self::STATUS_OUT;
         }
 
-        return $stock <= (int) $this->reorder_level ? self::STATUS_LOW : self::STATUS_OK;
+        return $stock < $this->moq ? self::STATUS_LOW : self::STATUS_OK;
     }
 
     /**

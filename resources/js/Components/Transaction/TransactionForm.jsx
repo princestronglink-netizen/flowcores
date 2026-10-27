@@ -33,6 +33,7 @@ import {
 } from '@/Components/ui/kit';
 
 // category_id is only used to narrow the Item dropdown; the server saves item_variant_id, quantity and unit_price.
+// unit_price is typed by the user for every line (variants no longer carry a price).
 const emptyItem = () => ({ item_id: '', item_brand_id: '', item_variant_id: '', quantity: 1, unit_price: '' });
 
 const emptyForm = () => ({
@@ -45,14 +46,14 @@ const emptyForm = () => ({
     note: '',
 });
 
-const variantLabel = (v) => [v.unit_of_measure, v.size].filter(Boolean).join(' · ') + ` — ${currency(v.price)}`;
+const variantLabel = (v) => [v.unit_of_measure, v.size].filter(Boolean).join(' · ');
 
 const rowGrid = 'lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1.5fr)_84px_116px_108px_32px]';
 const mobileLabel = 'mb-1 block text-xs font-medium text-slate-500 lg:hidden';
 
 /**
  * itemsLocked: true once a delivery exists (or the order was deducted the old way).
- * Items, quantities and prices are then read-only; everything else stays editable.
+ * Items and quantities are then read-only; everything else stays editable.
  * The server enforces the same rule; this keeps the form honest about it.
  */
 export default function TransactionForm({ clients = [], catalog = [], transaction = null, itemsLocked = false }) {
@@ -120,6 +121,8 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
         () => items.reduce((s, r) => s + (Number(r.quantity) || 0) * (Number(r.unit_price) || 0), 0),
         [items],
     );
+
+    // ---- delivery progress (locked orders) ----
     const deliveredAt = (index) => Number(transaction?.items?.[index]?.delivered_quantity ?? 0);
     const orderedDelivered = itemsLocked
         ? (transaction?.items ?? []).reduce((s, l) => s + Number(l.delivered_quantity ?? 0), 0)
@@ -156,12 +159,11 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
         if (itemsLocked) return;
         setData('items', items.map((it, i) => (i === index ? { ...it, ...patch } : it)));
     };
-    const changeItem = (i, v) => patchItem(i, { item_id: v, item_brand_id: '', item_variant_id: '', unit_price: '' });
-    const changeBrand = (i, v) => patchItem(i, { item_brand_id: v, item_variant_id: '', unit_price: '' });
+    const changeItem = (i, v) => patchItem(i, { item_id: v, item_brand_id: '', item_variant_id: '' });
+    const changeBrand = (i, v) => patchItem(i, { item_brand_id: v, item_variant_id: '' });
     const changeVariant = (i, variantId) => {
-        const variant = variantsFor(items[i]).find((v) => String(v.id) === String(variantId));
-        patchItem(i, { item_variant_id: variantId, unit_price: variant ? variant.price : '' });
-        clearErrors(`items.${i}.item_variant_id`, `items.${i}.unit_price`);
+        patchItem(i, { item_variant_id: variantId });
+        clearErrors(`items.${i}.item_variant_id`);
     };
     const updateItem = (i, field, value) => {
         patchItem(i, { [field]: value });
@@ -390,7 +392,7 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                         description={
                             itemsLocked
                                 ? 'Locked because deliveries have been recorded.'
-                                : 'Pick an item, brand and variant. The price fills in automatically.'
+                                : 'Pick an item, brand and variant, then enter the quantity and unit price.'
                         }
                         icon={Package}
                         bodyClass="p-0"

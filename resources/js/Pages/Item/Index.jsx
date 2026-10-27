@@ -17,7 +17,7 @@ import {
     Trash2,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { currency, cx, inputCls } from '@/Components/ui/kit';
+import { cx, inputCls } from '@/Components/ui/kit';
 
 const PILL = {
     out: 'bg-red-50 text-red-700 ring-red-200',
@@ -28,9 +28,9 @@ const PILL = {
 const STATUS_LABEL = { out: 'Out of stock', low: 'Low stock', ok: 'In stock' };
 
 const rowGrid =
-    'grid items-center gap-3 grid-cols-[28px_minmax(0,1fr)_72px_64px] lg:grid-cols-[28px_minmax(0,1.6fr)_minmax(0,1fr)_minmax(0,1.8fr)_110px_80px_70px]';
+    'grid items-center gap-3 grid-cols-[28px_minmax(0,1fr)_72px_64px] lg:grid-cols-[28px_minmax(0,1.6fr)_minmax(0,1fr)_minmax(0,1.8fr)_80px_70px]';
 
-const variantGrid = 'md:grid-cols-[minmax(0,1.3fr)_90px_minmax(0,1fr)_100px_minmax(0,1.8fr)]';
+const variantGrid = 'md:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_110px_minmax(0,1.8fr)]';
 
 const specOf = (v) => [v.unit_of_measure, v.size].filter(Boolean).join(' · ') || '—';
 const initials = (name) => (name || '?').trim().slice(0, 2).toUpperCase();
@@ -58,17 +58,13 @@ export default function Index({ items, categories = [] }) {
     const [openIds, setOpenIds] = useState(() => new Set());
     const [deletingItem, setDeletingItem] = useState(null);
     const stockOf = (v) => Number(v.stock);
-    const statusOf = (v) => {
-        const s = stockOf(v);
-        if (s <= 0) return 'out';
-        return s <= Number(v.reorder_level ?? 0) ? 'low' : 'ok';
-    };
+    // Status is computed on the server from the 30-day demand (MOQ).
+    const statusOf = (v) => v.stock_status ?? 'ok';
 
     const enriched = useMemo(
         () =>
             items.map((item) => {
                 const variants = item.brands.flatMap((b) => b.variants);
-                const prices = variants.map((v) => Number(v.price)).filter((n) => !Number.isNaN(n));
                 const total = variants.reduce((s, v) => s + stockOf(v), 0);
                 const outCount = variants.filter((v) => statusOf(v) === 'out').length;
                 const lowCount = variants.filter((v) => statusOf(v) === 'low').length;
@@ -79,8 +75,6 @@ export default function Index({ items, categories = [] }) {
                     outCount,
                     lowCount,
                     needs: outCount + lowCount,
-                    min: prices.length ? Math.min(...prices) : null,
-                    max: prices.length ? Math.max(...prices) : null,
                 };
             }),
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -203,7 +197,6 @@ export default function Index({ items, categories = [] }) {
                     <span>Item</span>
                     <span className="hidden lg:block">Category</span>
                     <span className="hidden lg:block">Sizes &amp; stock</span>
-                    <span className="hidden text-right lg:block">Price</span>
                     <span className="text-right">Total</span>
                     <span />
                 </div>
@@ -217,7 +210,7 @@ export default function Index({ items, categories = [] }) {
                     </div>
                 ) : (
                     <ul className="divide-y divide-slate-100">
-                        {rows.map(({ item, variants, total, needs, min, max }) => {
+                        {rows.map(({ item, variants, total, needs }) => {
                             const open = openIds.has(item.id);
                             const multiBrand = item.brands.length > 1;
                             const chips = item.brands.flatMap((b) =>
@@ -281,10 +274,6 @@ export default function Index({ items, categories = [] }) {
                                             )}
                                         </div>
 
-                                        <span className="hidden text-right text-sm font-medium tabular-nums text-slate-900 lg:block">
-                                            {min == null ? '—' : min === max ? currency(min) : `${currency(min)}+`}
-                                        </span>
-
                                         <span className="text-right">
                                             <span
                                                 title={STATUS_LABEL[totalStatus]}
@@ -332,9 +321,8 @@ export default function Index({ items, categories = [] }) {
 
                                                 <div className={cx('hidden gap-3 border-y border-slate-200 bg-slate-50 px-4 py-2 text-xs font-medium text-slate-500 md:grid', variantGrid)}>
                                                     <span>Size</span>
-                                                    <span>Price</span>
                                                     <span>Stock</span>
-                                                    <span>Reorder at</span>
+                                                    <span title="Total ordered in the last 30 days">MOQ (30 days)</span>
                                                     <span className="text-right">Actions</span>
                                                 </div>
 
@@ -359,15 +347,17 @@ export default function Index({ items, categories = [] }) {
                                                                                 {specOf(v)}
                                                                             </span>
                                                                         </span>
-                                                                        <span className="text-sm tabular-nums text-slate-700">{currency(v.price)}</span>
                                                                         <span className="flex items-center gap-2">
                                                                             <span className={cx('inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold tabular-nums ring-1 ring-inset', PILL[st])}>
                                                                                 {stockOf(v)}
                                                                             </span>
                                                                             {st !== 'ok' && <span className="text-xs text-slate-500">{STATUS_LABEL[st]}</span>}
                                                                         </span>
-                                                                        <span className="text-sm tabular-nums text-slate-500">
-                                                                            {Number(v.reorder_level) > 0 ? v.reorder_level : '—'}
+                                                                        <span
+                                                                            className="text-sm font-semibold tabular-nums text-slate-700"
+                                                                            title="Total ordered in the last 30 days"
+                                                                        >
+                                                                            {Number(v.moq) > 0 ? v.moq : '—'}
                                                                         </span>
                                                                         <span className="flex flex-wrap justify-start gap-2 md:justify-end">
                                                                             <Link href={route('stock-adjust.index', { variant: v.id })}>

@@ -14,7 +14,10 @@ class ItemController extends Controller
     public function index()
     {
         return Inertia::render('Item/Index', [
-            'items'      => Item::with('category', 'brands.variants')->latest()->get(),
+            'items' => Item::with([
+                'category',
+                'brands.variants' => fn ($q) => $q->withDemand(),
+            ])->latest()->get(),
             'categories' => ItemCategory::orderBy('category_name')->get(['id', 'category_name']),
         ]);
     }
@@ -29,7 +32,7 @@ class ItemController extends Controller
     public function edit(Item $item)
     {
         return Inertia::render('Item/Edit', [
-            'item'       => $item->load('brands.variants'),
+            'item'       => $item->load(['brands.variants' => fn ($q) => $q->withDemand()]),
             'categories' => ItemCategory::orderBy('category_name')->get(['id', 'category_name']),
         ]);
     }
@@ -47,10 +50,8 @@ class ItemController extends Controller
             'brands.*.variants.*.id'              => 'nullable|integer',
             'brands.*.variants.*.unit_of_measure' => 'required|string|max:50',
             'brands.*.variants.*.size'            => 'nullable|string|max:100',
-            'brands.*.variants.*.price'           => 'required|numeric|min:0',
             // Opening stock for NEW variants only. Existing stock changes go through Stock in / Stock out / Adjust stock.
             'brands.*.variants.*.stock'           => 'required|integer|min:0',
-            'brands.*.variants.*.reorder_level'   => 'nullable|integer|min:0',
         ];
     }
 
@@ -107,6 +108,7 @@ class ItemController extends Controller
      * so transaction lines that point to a variant stay valid.
      * Stock of an existing variant is NEVER overwritten from the form
      * (a stale form would wipe out deliveries made in the meantime).
+     * Price and reorder level no longer exist as inputs; the reorder level is computed automatically.
      */
     private function syncBrands(Item $item, array $brands): void
     {
@@ -130,8 +132,6 @@ class ItemController extends Controller
                 $attributes = [
                     'unit_of_measure' => $variantData['unit_of_measure'],
                     'size'            => $variantData['size'] ?? null,
-                    'price'           => $variantData['price'],
-                    'reorder_level'   => (int) ($variantData['reorder_level'] ?? 0),
                 ];
 
                 $variant = ! empty($variantData['id'])
