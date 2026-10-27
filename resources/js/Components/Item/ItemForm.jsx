@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import axios from 'axios';
 import { Link, useForm } from '@inertiajs/react';
 import { Button } from '@/Components/ui/Button';
+import SearchSelect from '@/Components/ui/SearchSelect';
 import { ArrowLeft, Package, Plus, Tags, Trash2 } from 'lucide-react';
 import {
     Banner,
@@ -16,6 +17,7 @@ import {
 } from '@/Components/ui/kit';
 
 const UNITS = ['pcs', 'box', 'pack', 'set', 'bag', 'roll', 'pair', 'kg', 'g', 'L', 'mL', 'm', 'cm'];
+const UNIT_OPTIONS = UNITS.map((u) => ({ value: u, label: u }));
 
 const emptyVariant = () => ({ id: null, unit_of_measure: 'pcs', size: '', stock: 0 });
 const emptyBrand = () => ({ id: null, brand_name: '', variants: [emptyVariant()] });
@@ -56,6 +58,14 @@ export default function ItemForm({ item = null, categories = [] }) {
     const [categoryList, setCategoryList] = useState(categories);
     const [newCategoryName, setNewCategoryName] = useState(null); // null = closed
     const [categoryError, setCategoryError] = useState('');
+
+    const categoryOptions = useMemo(
+        () => [
+            { value: '', label: 'Uncategorized' },
+            ...categoryList.map((c) => ({ value: c.id, label: c.category_name })),
+        ],
+        [categoryList],
+    );
 
     const addCategory = async () => {
         setCategoryError('');
@@ -145,17 +155,17 @@ export default function ItemForm({ item = null, categories = [] }) {
                                             </LinkButton>
                                         }
                                     >
-                                        <select
+                                        <SearchSelect
                                             id="item_category_id"
+                                            ariaLabel="Category"
+                                            placeholder="Uncategorized"
+                                            searchPlaceholder="Type a category"
+                                            emptyText="No categories found"
+                                            options={categoryOptions}
                                             value={data.item_category_id}
-                                            onChange={(e) => updateField('item_category_id', e.target.value)}
-                                            className={input(errors.item_category_id)}
-                                        >
-                                            <option value="">Uncategorized</option>
-                                            {categoryList.map((c) => (
-                                                <option key={c.id} value={c.id}>{c.category_name}</option>
-                                            ))}
-                                        </select>
+                                            onChange={(v) => updateField('item_category_id', v)}
+                                            inputClassName={input(errors.item_category_id)}
+                                        />
                                     </Field>
                                     {newCategoryName !== null && (
                                         <div className="mt-2 flex gap-2">
@@ -246,16 +256,16 @@ export default function ItemForm({ item = null, categories = [] }) {
                                                 >
                                                     <div>
                                                         <span className={mobileLabel}>Unit</span>
-                                                        <select
-                                                            aria-label="Unit of measure"
+                                                        <SearchSelect
+                                                            ariaLabel="Unit of measure"
+                                                            placeholder="Select unit"
+                                                            searchPlaceholder="Type a unit"
+                                                            emptyText="No units found"
+                                                            options={UNIT_OPTIONS}
                                                             value={variant.unit_of_measure}
-                                                            onChange={(e) => updateVariant(b, v, 'unit_of_measure', e.target.value)}
-                                                            className={input(errors[key('unit_of_measure')])}
-                                                        >
-                                                            {UNITS.map((u) => (
-                                                                <option key={u} value={u}>{u}</option>
-                                                            ))}
-                                                        </select>
+                                                            onChange={(u) => updateVariant(b, v, 'unit_of_measure', u)}
+                                                            inputClassName={input(errors[key('unit_of_measure')])}
+                                                        />
                                                         {errors[key('unit_of_measure')] && (
                                                             <p className="mt-1 text-xs text-red-600">{errors[key('unit_of_measure')]}</p>
                                                         )}
