@@ -26,6 +26,7 @@ class ItemController extends Controller
     {
         return Inertia::render('Item/Create', [
             'categories' => ItemCategory::orderBy('category_name')->get(['id', 'category_name']),
+            'units'      => $this->unitSuggestions(),
         ]);
     }
 
@@ -34,7 +35,26 @@ class ItemController extends Controller
         return Inertia::render('Item/Edit', [
             'item'       => $item->load(['brands.variants' => fn ($q) => $q->withDemand()]),
             'categories' => ItemCategory::orderBy('category_name')->get(['id', 'category_name']),
+            'units'      => $this->unitSuggestions(),
         ]);
+    }
+
+    /**
+     * Every unit of measure already used by any variant, so user-defined
+     * units get suggested (and reused) in future forms.
+     */
+    private function unitSuggestions(): array
+    {
+        // Resolve the variant model through the relations, so no model name is hard-coded.
+        $variantModel = (new Item)->brands()->getRelated()->variants()->getRelated();
+
+        return $variantModel->newQuery()
+            ->whereNotNull('unit_of_measure')
+            ->where('unit_of_measure', '!=', '')
+            ->distinct()
+            ->orderBy('unit_of_measure')
+            ->pluck('unit_of_measure')
+            ->all();
     }
 
     protected function rules(): array
@@ -48,6 +68,7 @@ class ItemController extends Controller
             'brands.*.brand_name'                 => 'required|string|max:255',
             'brands.*.variants'                   => 'required|array|min:1',
             'brands.*.variants.*.id'              => 'nullable|integer',
+            // User-defined: any text is accepted.
             'brands.*.variants.*.unit_of_measure' => 'required|string|max:50',
             'brands.*.variants.*.size'            => 'nullable|string|max:100',
             // Opening stock for NEW variants only. Existing stock changes go through Stock in / Stock out / Adjust stock.
@@ -130,7 +151,7 @@ class ItemController extends Controller
 
             foreach ($brandData['variants'] as $variantData) {
                 $attributes = [
-                    'unit_of_measure' => $variantData['unit_of_measure'],
+                    'unit_of_measure' => trim($variantData['unit_of_measure']),
                     'size'            => $variantData['size'] ?? null,
                 ];
 

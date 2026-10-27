@@ -3,13 +3,13 @@ import PageHeading from '@/Components/PageHeading';
 import { Head } from '@inertiajs/react';
 import ItemForm from '@/Components/Item/ItemForm';
 
-export default function Edit({ item, categories }) {
+export default function Edit({ item, categories, units = [] }) {
     return (
         <AuthenticatedLayout
             header={<PageHeading title="Edit Item" subtitle="Update item, brands and variants." />}
         >
             <Head title="Edit Item" />
-            <ItemForm item={item} categories={categories} />
+            <ItemForm item={item} categories={categories} units={units} />
         </AuthenticatedLayout>
     );
 }

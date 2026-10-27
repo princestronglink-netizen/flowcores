@@ -16,8 +16,8 @@ import {
     inputCls,
 } from '@/Components/ui/kit';
 
-const UNITS = ['pcs', 'box', 'pack', 'set', 'bag', 'roll', 'pair', 'kg', 'g', 'L', 'mL', 'm', 'cm'];
-const UNIT_OPTIONS = UNITS.map((u) => ({ value: u, label: u }));
+// Starter suggestions only. Users can type any unit they like.
+const DEFAULT_UNITS = ['pcs', 'box', 'pack', 'set', 'bag', 'roll', 'pair', 'kg', 'g', 'L', 'mL', 'm', 'cm'];
 
 const emptyVariant = () => ({ id: null, unit_of_measure: 'pcs', size: '', stock: 0 });
 const emptyBrand = () => ({ id: null, brand_name: '', variants: [emptyVariant()] });
@@ -25,7 +25,7 @@ const emptyBrand = () => ({ id: null, brand_name: '', variants: [emptyVariant()]
 const variantGrid = 'sm:grid-cols-[repeat(3,minmax(0,1fr))_32px]';
 const mobileLabel = 'mb-1 block text-xs font-medium text-slate-500 sm:hidden';
 
-export default function ItemForm({ item = null, categories = [] }) {
+export default function ItemForm({ item = null, categories = [], units = [] }) {
     const isEditing = Boolean(item);
 
     const initialData = item
@@ -85,6 +85,19 @@ export default function ItemForm({ item = null, categories = [] }) {
         return { variantCount: variants.length, stock: variants.reduce((s, v) => s + (Number(v.stock) || 0), 0) };
     }, [brands]);
 
+    // Suggestions for the free-text unit field: defaults + units already saved in the database
+    // + units typed elsewhere in this form. De-duplicated case-insensitively.
+    const unitSuggestions = useMemo(() => {
+        const seen = new Map();
+        [...DEFAULT_UNITS, ...units, ...brands.flatMap((b) => b.variants.map((v) => v.unit_of_measure))]
+            .map((u) => String(u ?? '').trim())
+            .filter(Boolean)
+            .forEach((u) => {
+                if (!seen.has(u.toLowerCase())) seen.set(u.toLowerCase(), u);
+            });
+        return [...seen.values()];
+    }, [units, brands]);
+
     // ---- helpers ----
     const updateField = (field, value) => {
         setData(field, value);
@@ -124,6 +137,13 @@ export default function ItemForm({ item = null, categories = [] }) {
     return (
         <>
             <form onSubmit={submit} noValidate className="mx-auto w-full max-w-[1680px] p-4 sm:p-6">
+                {/* Shared suggestions for every Unit field */}
+                <datalist id="unit-options">
+                    {unitSuggestions.map((u) => (
+                        <option key={u} value={u} />
+                    ))}
+                </datalist>
+
                 <Link href={listUrl} className="mb-4 inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-slate-900">
                     <ArrowLeft className="h-4 w-4" />
                     Items
@@ -229,7 +249,7 @@ export default function ItemForm({ item = null, categories = [] }) {
                                                 <Plus />
                                                 Add variant
                                             </Button>
-                                                {brands.length > 1 && (
+                                            {brands.length > 1 && (
                                                 <IconButton icon={Trash2} label="Remove brand" danger onClick={() => removeBrand(b)} />
                                             )}
                                         </div>
@@ -256,15 +276,17 @@ export default function ItemForm({ item = null, categories = [] }) {
                                                 >
                                                     <div>
                                                         <span className={mobileLabel}>Unit</span>
-                                                        <SearchSelect
-                                                            ariaLabel="Unit of measure"
-                                                            placeholder="Select unit"
-                                                            searchPlaceholder="Type a unit"
-                                                            emptyText="No units found"
-                                                            options={UNIT_OPTIONS}
+                                                        {/* User-defined unit: type anything, or pick a suggestion */}
+                                                        <input
+                                                            aria-label="Unit of measure"
+                                                            type="text"
+                                                            list="unit-options"
+                                                            maxLength={50}
+                                                            autoComplete="off"
+                                                            placeholder="e.g. pcs, gallon, sack"
                                                             value={variant.unit_of_measure}
-                                                            onChange={(u) => updateVariant(b, v, 'unit_of_measure', u)}
-                                                            inputClassName={input(errors[key('unit_of_measure')])}
+                                                            onChange={(e) => updateVariant(b, v, 'unit_of_measure', e.target.value)}
+                                                            className={input(errors[key('unit_of_measure')])}
                                                         />
                                                         {errors[key('unit_of_measure')] && (
                                                             <p className="mt-1 text-xs text-red-600">{errors[key('unit_of_measure')]}</p>
