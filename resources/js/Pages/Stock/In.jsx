@@ -5,8 +5,8 @@ import PageCard from '@/Components/PageCard';
 import StockToast from '@/Components/Pipeline/StockToast';
 import { Button } from '@/Components/ui/Button';
 import { Head, useForm, usePage } from '@inertiajs/react';
-import { PackagePlus, Plus, Trash2 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { ChevronDown, PackagePlus, Plus, Search, Trash2, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 const today = () => new Date().toISOString().slice(0, 10);
 const emptyLine = (variantId = '') => ({ item_variant_id: variantId, quantity: '' });
@@ -22,6 +22,175 @@ const STATUS = {
 };
 
 const formatDate = (v) => new Date(v).toLocaleDateString(undefined, { dateStyle: 'medium' });
+
+/**
+ * Searchable item picker.
+ * Type to filter by item, brand or size (every word you type must match, in any order,
+ * e.g. "nail 2" or "holcim 40kg"). Use ↑ ↓ and Enter, or click, to choose.
+ * Items already used on another line of the receipt are shown but cannot be picked again.
+ */
+function ItemCombobox({ variants, value, usedIds, onChange }) {
+    const rootRef = useRef(null);
+    const inputRef = useRef(null);
+    const listRef = useRef(null);
+    const [open, setOpen] = useState(false);
+    const [query, setQuery] = useState('');
+    const [active, setActive] = useState(0);
+
+    const selected = variants.find((v) => String(v.id) === String(value));
+
+    const results = useMemo(() => {
+        const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+        if (words.length === 0) return variants;
+        return variants.filter((v) => {
+            const text = String(v.label ?? '').toLowerCase();
+            return words.every((w) => text.includes(w));
+        });
+    }, [variants, query]);
+
+    const isTaken = (v) => usedIds.has(String(v.id)) && String(v.id) !== String(value);
+
+    const close = () => {
+        setOpen(false);
+        setQuery('');
+    };
+
+    const choose = (v) => {
+        if (isTaken(v)) return;
+        onChange(v.id);
+        close();
+    };
+
+    // close when clicking outside
+    useEffect(() => {
+        if (!open) return;
+        const onDown = (e) => {
+            if (rootRef.current && !rootRef.current.contains(e.target)) close();
+        };
+        document.addEventListener('mousedown', onDown);
+        return () => document.removeEventListener('mousedown', onDown);
+    }, [open]);
+
+    // keep the highlighted row inside the visible part of the list
+    useEffect(() => {
+        if (!open) return;
+        listRef.current?.children[active]?.scrollIntoView({ block: 'nearest' });
+    }, [active, open]);
+
+    const onKeyDown = (e) => {
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (!open) setOpen(true);
+            else setActive((i) => Math.min(i + 1, results.length - 1));
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            setActive((i) => Math.max(i - 1, 0));
+        } else if (e.key === 'Enter') {
+            if (open) {
+                e.preventDefault(); // don't submit the receipt form
+                if (results[active]) choose(results[active]);
+            }
+        } else if (e.key === 'Escape') {
+            if (open) {
+                e.preventDefault();
+                close();
+            }
+        } else if (e.key === 'Tab') {
+            close();
+        }
+    };
+
+    return (
+        <div ref={rootRef} className="relative">
+            <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#667292]" />
+                <input
+                    ref={inputRef}
+                    type="text"
+                    role="combobox"
+                    aria-label="Item"
+                    aria-expanded={open}
+                    aria-autocomplete="list"
+                    autoComplete="off"
+                    placeholder="Type to search item, brand or size"
+                    value={open ? query : selected?.label ?? ''}
+                    onFocus={() => {
+                        setOpen(true);
+                        setActive(0);
+                    }}
+                    onChange={(e) => {
+                        setQuery(e.target.value);
+                        setOpen(true);
+                        setActive(0);
+                    }}
+                    onKeyDown={onKeyDown}
+                    className={`${fieldClass} mt-0 pl-9 pr-9`}
+                />
+                {open ? (
+                    <ChevronDown className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 rotate-180 text-[#667292]" />
+                ) : selected ? (
+                    <button
+                        type="button"
+                        aria-label="Clear item"
+                        onClick={() => {
+                            onChange('');
+                            inputRef.current?.focus();
+                        }}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#667292] hover:text-red-600"
+                    >
+                        <X className="size-4" />
+                    </button>
+                ) : (
+                    <ChevronDown className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-[#667292]" />
+                )}
+            </div>
+
+            {open && (
+                <ul
+                    ref={listRef}
+                    role="listbox"
+                    className="absolute left-0 right-0 z-30 mt-1 max-h-64 overflow-auto rounded-md border border-[#bccad6] bg-white py-1 shadow-lg"
+                >
+                    {results.length === 0 ? (
+                        <li className="px-3 py-3 text-sm text-[#667292]">
+                            No items match “{query}”. Try fewer or different words.
+                        </li>
+                    ) : (
+                        results.map((v, i) => {
+                            const taken = isTaken(v);
+                            return (
+                                <li
+                                    key={v.id}
+                                    role="option"
+                                    aria-selected={String(v.id) === String(value)}
+                                    aria-disabled={taken}
+                                    // mousedown (not click) so the input keeps focus and nothing flickers
+                                    onMouseDown={(e) => {
+                                        e.preventDefault();
+                                        choose(v);
+                                    }}
+                                    onMouseEnter={() => setActive(i)}
+                                    className={`flex items-center justify-between gap-3 px-3 py-2 text-sm ${
+                                        taken
+                                            ? 'cursor-not-allowed text-[#9aa5b5]'
+                                            : 'cursor-pointer text-[#3a4157]'
+                                    } ${i === active && !taken ? 'bg-[#eef1f5]' : ''} ${
+                                        String(v.id) === String(value) ? 'font-semibold' : ''
+                                    }`}
+                                >
+                                    <span className="min-w-0 flex-1 truncate">{v.label}</span>
+                                    <span className="shrink-0 text-xs text-[#667292]">
+                                        {taken ? 'Already added' : `${v.stock} in stock`}
+                                    </span>
+                                </li>
+                            );
+                        })
+                    )}
+                </ul>
+            )}
+        </div>
+    );
+}
 
 export default function In({ variants = [], receipts = [] }) {
     const { flash } = usePage().props;
@@ -123,6 +292,7 @@ export default function In({ variants = [], receipts = [] }) {
 
                         {typeof errors.items === 'string' && <p className={errorClass}>{errors.items}</p>}
 
+                        {/* no overflow-hidden here, so the search dropdown can extend past the list */}
                         <ul className="mt-3 divide-y rounded-md border border-[#bccad6]">
                             {items.map((row, index) => {
                                 const variant = byId[String(row.item_variant_id)];
@@ -132,20 +302,12 @@ export default function In({ variants = [], receipts = [] }) {
                                 return (
                                     <li key={index} className="grid grid-cols-1 gap-3 p-3 sm:grid-cols-[minmax(0,1fr)_110px_32px] sm:items-start">
                                         <div>
-                                            <select
+                                            <ItemCombobox
+                                                variants={variants}
                                                 value={row.item_variant_id}
-                                                onChange={(e) => setLine(index, { item_variant_id: e.target.value })}
-                                                aria-label="Item"
-                                                className={`${fieldClass} mt-0`}
-                                            >
-                                                <option value="" disabled>Select item, brand and size</option>
-                                                {variants.map((v) => (
-                                                    <option key={v.id} value={v.id}
-                                                        disabled={usedIds.has(String(v.id)) && String(v.id) !== String(row.item_variant_id)}>
-                                                        {v.label}
-                                                    </option>
-                                                ))}
-                                            </select>
+                                                usedIds={usedIds}
+                                                onChange={(id) => setLine(index, { item_variant_id: id })}
+                                            />
                                             {variant && (
                                                 <p className="mt-1 text-xs text-[#667292]">
                                                     In stock: <b>{variant.stock}</b>
