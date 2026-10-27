@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect } from 'react';
 import axios from 'axios';
 import { Link, useForm } from '@inertiajs/react';
 import { Button } from '@/Components/ui/Button';
+import SearchSelect from '@/Components/ui/SearchSelect';
 import {
     ArrowLeft,
     Building2,
@@ -275,17 +276,21 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                                         </LinkButton>
                                     }
                                 >
-                                    <select
+                                    <SearchSelect
                                         id="client_id"
+                                        ariaLabel="Client"
+                                        placeholder="Select a client"
+                                        searchPlaceholder="Type a client name or code"
+                                        emptyText="No clients found"
+                                        options={clientList.map((c) => ({
+                                            value: c.id,
+                                            label: c.client_name,
+                                            hint: c.client_code,
+                                        }))}
                                         value={data.client_id}
-                                        onChange={(e) => handleClientChange(e.target.value)}
-                                        className={input(errors.client_id)}
-                                    >
-                                        <option value="" disabled>Select a client</option>
-                                        {clientList.map((c) => (
-                                            <option key={c.id} value={c.id}>{c.client_name}</option>
-                                        ))}
-                                    </select>
+                                        onChange={handleClientChange}
+                                        inputClassName={input(errors.client_id)}
+                                    />
                                 </Field>
 
                                 {showAddClient && (
@@ -462,50 +467,51 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                                     <div key={index} className={cx('grid grid-cols-1 gap-3 px-5 py-3.5 lg:items-start', rowGrid)}>
                                         <div>
                                             <span className={mobileLabel}>Item</span>
-                                            <select
+                                            <SearchSelect
+                                                ariaLabel="Item"
+                                                placeholder="Select item"
+                                                searchPlaceholder="Type an item name"
+                                                emptyText="No items found"
+                                                options={itemsFor().map((i) => ({ value: i.id, label: i.item_name }))}
                                                 value={item.item_id}
-                                                onChange={(e) => changeItem(index, e.target.value)}
+                                                onChange={(v) => changeItem(index, v)}
                                                 disabled={itemsLocked}
-                                                aria-label="Item"
-                                                className={input(variantError && !item.item_id)}
-                                            >
-                                                <option value="" disabled>Select item</option>
-                                                {itemsFor().map((i) => (
-                                                    <option key={i.id} value={i.id}>{i.item_name}</option>
-                                                ))}
-                                            </select>
+                                                inputClassName={input(variantError && !item.item_id)}
+                                            />
                                         </div>
 
                                         <div>
                                             <span className={mobileLabel}>Brand</span>
-                                            <select
+                                            <SearchSelect
+                                                ariaLabel="Brand"
+                                                placeholder={item.item_id ? 'Select brand' : '—'}
+                                                searchPlaceholder="Type a brand"
+                                                emptyText="No brands found"
+                                                options={brandsFor(item).map((b) => ({ value: b.id, label: b.brand_name }))}
                                                 value={item.item_brand_id}
-                                                onChange={(e) => changeBrand(index, e.target.value)}
+                                                onChange={(v) => changeBrand(index, v)}
                                                 disabled={itemsLocked || !item.item_id}
-                                                aria-label="Brand"
-                                                className={input(variantError && item.item_id && !item.item_brand_id)}
-                                            >
-                                                <option value="" disabled>{item.item_id ? 'Select brand' : '—'}</option>
-                                                {brandsFor(item).map((b) => (
-                                                    <option key={b.id} value={b.id}>{b.brand_name}</option>
-                                                ))}
-                                            </select>
+                                                inputClassName={input(variantError && item.item_id && !item.item_brand_id)}
+                                            />
                                         </div>
 
                                         <div>
                                             <span className={mobileLabel}>Variant</span>
-                                            <select
+                                            <SearchSelect
+                                                ariaLabel="Variant"
+                                                placeholder={item.item_brand_id ? 'Select variant' : '—'}
+                                                searchPlaceholder="Type a size or unit"
+                                                emptyText="No variants found"
+                                                options={variantsFor(item).map((v) => ({
+                                                    value: v.id,
+                                                    label: variantLabel(v),
+                                                    hint: `${v.stock} in stock`,
+                                                }))}
                                                 value={item.item_variant_id}
-                                                onChange={(e) => changeVariant(index, e.target.value)}
+                                                onChange={(v) => changeVariant(index, v)}
                                                 disabled={itemsLocked || !item.item_brand_id}
-                                                aria-label="Variant"
-                                                className={input(variantError)}
-                                            >
-                                                <option value="" disabled>{item.item_brand_id ? 'Select variant' : '—'}</option>
-                                                {variantsFor(item).map((v) => (
-                                                    <option key={v.id} value={v.id}>{variantLabel(v)}</option>
-                                                ))}
-                                            </select>
+                                                inputClassName={input(variantError)}
+                                            />
                                             {variantError && <p className="mt-1 text-xs text-red-600">Select an item, brand and variant.</p>}
                                             {itemsLocked ? (
                                                 <p className={cx('mt-1 text-xs', lineDelivered >= Number(item.quantity) ? 'text-emerald-600' : 'text-slate-500')}>
