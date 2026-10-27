@@ -229,7 +229,7 @@ export default function ItemForm({ item = null, categories = [] }) {
                                                 <Plus />
                                                 Add variant
                                             </Button>
-                                            {brands.length > 1 && (
+                                                {brands.length > 1 && (
                                                 <IconButton icon={Trash2} label="Remove brand" danger onClick={() => removeBrand(b)} />
                                             )}
                                         </div>
