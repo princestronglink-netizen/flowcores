@@ -2,9 +2,13 @@
 
 namespace App\Models;
 
+use App\Exceptions\InsufficientStockException;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 
 class Transaction extends Model
 {
@@ -21,7 +25,20 @@ class Transaction extends Model
         'winning_message',
         'amount',
         'note',
+        'stock_deducted_at', // set on the first delivery; null when nothing has been delivered
     ];
+
+    protected $casts = [
+        'stock_deducted_at' => 'datetime',
+    ];
+
+    protected $appends = ['total'];
+
+    protected $attributes = [
+        'status' => 'open',
+    ];
+
+    /* ------------------------------ Relations ------------------------------ */
 
     public function client(): BelongsTo
     {
@@ -53,33 +70,67 @@ class Transaction extends Model
         return $this->hasMany(TransactionItem::class);
     }
 
-    /**
-     * Move this transaction to a new stage and log the change.
-     * Validates the stage actually belongs to this transaction's
-     * pipeline, so you can't move a "Sales" transaction into a
-     * "Support" pipeline's stage by mistake.
-     */
-    public function moveToStage(PipelineStage $stage, ?int $changedBy = null, ?string $note = null): void
+    public function deliveries(): HasMany
     {
-        if ($stage->pipeline_id !== $this->pipeline_id) {
-            throw new \InvalidArgumentException(
-                'That stage does not belong to this transaction\'s pipeline.'
-            );
-        }
-
-        $this->update(['pipeline_stage_id' => $stage->id]);
-
-        $this->stageHistory()->create([
-            'pipeline_stage_id' => $stage->id,
-            'changed_by' => $changedBy,
-            'note' => $note,
-        ]);
+        return $this->hasMany(Delivery::class);
     }
 
-    /**
-     * Advance to whatever stage comes next in sort_order.
-     * Returns false if already on the final stage (or has no stage set).
-     */
+    /** The quotation this transaction was created from (if any). */
+    public function quotation(): HasOne
+    {
+        return $this->hasOne(Quotation::class, 'transaction_id');
+    }
+
+    /* ------------------------------- Stages -------------------------------- */
+
+    public function moveToStage(PipelineStage $stage, ?int $changedBy = null, ?string $note = null): array
+    {
+        if ($stage->pipeline_id !== $this->pipeline_id) {
+            throw new \InvalidArgumentException('That stage does not belong to this transaction\'s pipeline.');
+        }
+
+        $messages = [];
+
+        DB::transaction(function () use ($stage, $changedBy, $note, &$messages) {
+            $this->update(['pipeline_stage_id' => $stage->id]);
+            $this->unsetRelation('stage');
+
+            $this->stageHistory()->create([
+                'pipeline_stage_id' => $stage->id,
+                'changed_by'        => $changedBy,
+                'note'              => $note,
+            ]);
+
+            $messages = $this->runStageAutomation($stage, $changedBy);
+        });
+
+        return $messages;
+    }
+
+    /** Auto-create the quotation / client purchase order when this stage is flagged for it. */
+    public function runStageAutomation(PipelineStage $stage, ?int $by = null): array
+    {
+        $messages = [];
+
+        if ($stage->creates_quotation && ($q = Quotation::generateFor($this, $by))) {
+            $this->stageHistory()->create([
+                'pipeline_stage_id' => $stage->id, 'changed_by' => $by,
+                'note' => "Quotation {$q->quotation_number} generated",
+            ]);
+            $messages[] = "Quotation {$q->quotation_number} was generated.";
+        }
+
+        if ($stage->creates_client_po && ($cpo = ClientPurchaseOrder::generateFor($this, $by))) {
+            $this->stageHistory()->create([
+                'pipeline_stage_id' => $stage->id, 'changed_by' => $by,
+                'note' => "Client purchase order {$cpo->cpo_number} generated",
+            ]);
+            $messages[] = "Client purchase order {$cpo->cpo_number} was generated. Open it, enter the client's PO number and confirm the final items.";
+        }
+
+        return $messages;
+    }
+
     public function advanceStage(?int $changedBy = null, ?string $note = null): bool
     {
         if (! $this->stage) {
@@ -100,33 +151,534 @@ class Transaction extends Model
         return true;
     }
 
-    /**
-     * Mark this transaction as won or lost. Keeps its pipeline_stage_id
-     * as-is (for reporting on where it was when it closed) and logs
-     * the change in the same history table as stage moves.
-     */
-    public function markStatus(string $status, ?int $changedBy = null, ?string $note = null): void
+    /** The one stage of this pipeline where deliveries are recorded. */
+    public function deliveryStage(): ?PipelineStage
     {
+        return $this->pipeline->stages()->where('deducts_stock', true)->first();
+    }
+
+    /** If the card is past the delivery stage, send it back to it. Otherwise it stays put. */
+    public function returnToDeliveryStage(?int $changedBy = null, ?string $note = null): ?PipelineStage
+    {
+        $target = $this->deliveryStage();
+
+        if (! $target || ! $this->stage || $this->stage->sort_order <= $target->sort_order) {
+            return null;
+        }
+
+        $this->moveToStage($target, $changedBy, $note);
+
+        return $target;
+    }
+
+    /**
+     * Mark as won or lost.
+     * Won: stock stays out (it left with the deliveries).
+     * Lost: whatever is still delivered comes back. $restock decides whether it goes back
+     *       on the shelf (true) or is written off (false, needs a reason).
+     */
+    public function markStatus(
+        string $status,
+        ?int $changedBy = null,
+        ?string $note = null,
+        bool $restock = true,
+        ?string $reason = null
+    ): void {
         if (! in_array($status, ['won', 'lost'], true)) {
             throw new \InvalidArgumentException('Status must be "won" or "lost".');
         }
 
-        $this->update(['status' => $status]);
+        DB::transaction(function () use ($status, $changedBy, $note, $restock, $reason) {
+            $this->lockAndRefresh();
 
-        $this->stageHistory()->create([
-            'pipeline_stage_id' => $this->pipeline_stage_id,
-            'changed_by'        => $changedBy,
-            'note'               => $note ?? ucfirst($status) . ' via pipeline board',
-        ]);
+            if ($this->status !== 'open') {
+                throw new \RuntimeException('This transaction is already closed.');
+            }
+
+            $this->update(['status' => $status]);
+
+            $historyNote = $note ?? ucfirst($status) . ' via pipeline board';
+
+            if ($status === 'lost') {
+                $this->returnOutstanding(
+                    $restock,
+                    $changedBy,
+                    $reason,
+                    $restock ? 'Deal marked as lost: stock restored' : 'Deal marked as lost: not restocked'
+                );
+
+                if (! $restock) {
+                    $historyNote .= ' (delivered items written off)';
+                }
+            }
+
+            $this->stageHistory()->create([
+                'pipeline_stage_id' => $this->pipeline_stage_id,
+                'changed_by'        => $changedBy,
+                'note'              => $historyNote,
+            ]);
+        });
+    }
+
+    /* --------------------------- Delivery status --------------------------- */
+
+    /** Does this transaction's pipeline have a stage that deducts stock? */
+    public function requiresDelivery(): bool
+    {
+        return $this->pipeline->stages()->where('deducts_stock', true)->exists();
     }
 
     /**
-     * Sum of (quantity * unit_price) across this transaction's items.
-     * Used by the Kanban board card. Eager-load "items" before
-     * accessing this on a list of transactions to avoid N+1 queries.
+     * Old transactions had their whole order deducted at once (stock_deducted_at set,
+     * no delivery records). Treat those as fully delivered.
      */
+    public function isLegacyDeducted(): bool
+    {
+        return $this->stock_deducted_at !== null && ! $this->deliveries()->exists();
+    }
+
+    /** Net delivered quantity (deliveries minus returns). */
+    public function deliveredQuantity(): int
+    {
+        if ($this->isLegacyDeducted()) {
+            return (int) $this->items()->sum('quantity');
+        }
+
+        return (int) DeliveryItem::whereIn('delivery_id', $this->deliveries()->select('id'))->sum('quantity');
+    }
+
+    public function hasDeliveredItems(): bool
+    {
+        return $this->deliveredQuantity() > 0;
+    }
+
+    public function isFullyDelivered(): bool
+    {
+        if ($this->isLegacyDeducted()) {
+            return true;
+        }
+
+        return $this->items()
+            ->withSum('deliveryItems as delivered_quantity', 'quantity')
+            ->get()
+            ->every(fn ($line) => (int) $line->delivered_quantity >= $line->quantity);
+    }
+
+    /** True when the pipeline expects deliveries and this transaction isn't fully delivered yet. */
+    public function deliveryBlocksCompletion(): bool
+    {
+        return $this->requiresDelivery() && ! $this->isFullyDelivered();
+    }
+
+    /* ---------------------------- Delivery & stock ---------------------------- */
+
+    /**
+     * Record one (possibly partial) delivery and deduct exactly those quantities.
+     * Every deduction is written to the stock ledger.
+     *
+     * $token is a one-time id sent by the browser. If the same token arrives twice
+     * (double click, network retry) the first delivery is returned and nothing changes.
+     *
+     * @param  array<int, array{transaction_item_id:int, quantity:int}>  $rows
+     * @throws InsufficientStockException  stock is short (nothing is saved)
+     * @throws \RuntimeException           the delivery isn't allowed (nothing is saved)
+     */
+    public function recordDelivery(array $rows, ?int $deliveredBy = null, ?string $note = null, ?string $token = null): Delivery
+    {
+        $rows = $this->normalizeRows($rows);
+
+        return DB::transaction(function () use ($rows, $deliveredBy, $note, $token) {
+            $this->lockAndRefresh();
+
+            // Same request sent twice: return the first result, change nothing.
+            if ($token && ($existing = $this->deliveries()->where('request_token', $token)->first())) {
+                return $existing;
+            }
+
+            if ($this->status !== 'open') {
+                throw new \RuntimeException('This transaction is already closed.');
+            }
+
+            if (! $this->stage?->deducts_stock) {
+                throw new \RuntimeException('Deliveries can only be recorded in the delivery stage.');
+            }
+
+            if ($this->isLegacyDeducted()) {
+                throw new \RuntimeException('Stock for this transaction was already deducted in full.');
+            }
+
+            if ($rows->isEmpty()) {
+                throw new \RuntimeException('Enter a quantity for at least one item.');
+            }
+
+            $lines = $this->linesWithDelivered();
+
+            // 1. Every row must be a real line with enough left to deliver.
+            foreach ($rows as $row) {
+                $line = $lines->get($row['transaction_item_id'])
+                    ?? throw new \RuntimeException('One of the items does not belong to this transaction.');
+
+                $remaining = $line->quantity - (int) $line->delivered_quantity;
+
+                if ($row['quantity'] > $remaining) {
+                    throw new \RuntimeException("Only {$remaining} left to deliver for {$this->lineLabel($line)}.");
+                }
+            }
+
+            // 2. Stock check per variant (two lines can share a variant).
+            $needByVariant = $rows
+                ->groupBy(fn ($r) => $lines[$r['transaction_item_id']]->item_variant_id)
+                ->map(fn ($group) => (int) $group->sum('quantity'));
+
+            $variants = $this->lockVariants($needByVariant->keys());
+
+            $short = [];
+            foreach ($needByVariant as $variantId => $need) {
+                $available = (int) ($variants->get($variantId)?->stock ?? 0);
+
+                if ($available < $need) {
+                    $label   = $this->lineLabel($lines->firstWhere('item_variant_id', $variantId));
+                    $short[] = "{$label} (available {$available}, needed {$need})";
+                }
+            }
+
+            if ($short) {
+                throw new InsufficientStockException('Not enough stock: ' . implode('; ', $short) . '.');
+            }
+
+            // 3. Save.
+            $delivery = $this->deliveries()->create([
+                'delivered_by'  => $deliveredBy,
+                'delivered_at'  => now(),
+                'note'          => $note,
+                'is_return'     => false,
+                'request_token' => $token,
+            ]);
+
+            foreach ($needByVariant as $variantId => $need) {
+                $variants[$variantId]->applyStock(-$need, StockMovement::TYPE_DELIVERY, [
+                    'transaction_id' => $this->id,
+                    'delivery_id'    => $delivery->id,
+                    'user_id'        => $deliveredBy,
+                    'reference'      => "Transaction: {$this->name}",
+                    'note'           => $note,
+                ]);
+            }
+
+            foreach ($rows as $row) {
+                $delivery->items()->create([
+                    'transaction_item_id' => $row['transaction_item_id'],
+                    'quantity'            => $row['quantity'],
+                ]);
+            }
+
+            $this->update(['stock_deducted_at' => $this->stock_deducted_at ?? now()]);
+
+            return $delivery;
+        });
+    }
+
+    /**
+     * Return delivered items. For every line the user says how many came back and how many
+     * of those are NOT restockable (damaged, defective, ...):
+     *   - restockable units go back into stock            (ledger: "return")
+     *   - non-restockable units stay out of stock         (ledger: "write_off", reason required)
+     *
+     * And, independently, whether the customer gets a replacement:
+     *   - replace = true  → the units stay on the order and can be delivered again
+     *   - replace = false → the order shrinks by the returned quantity (amount is recalculated)
+     *
+     * Allowed in the delivery stage and in any stage after it.
+     *
+     * @param  array<int, array{transaction_item_id:int, quantity:int, written_off?:int, reason?:string, replace?:bool}>  $rows
+     * @throws \RuntimeException  the return isn't allowed (nothing is saved)
+     */
+    public function recordReturn(array $rows, ?int $returnedBy = null, ?string $note = null, ?string $token = null): Delivery
+    {
+        $rows = $this->normalizeRows($rows);
+
+        return DB::transaction(function () use ($rows, $returnedBy, $note, $token) {
+            $this->lockAndRefresh();
+
+            // Same request sent twice: return the first result, change nothing.
+            if ($token && ($existing = $this->deliveries()->where('request_token', $token)->first())) {
+                return $existing;
+            }
+
+            if ($this->status !== 'open') {
+                throw new \RuntimeException('This transaction is already closed.');
+            }
+
+            $deliveryStage = $this->deliveryStage();
+
+            if (! $deliveryStage || ! $this->stage || $this->stage->sort_order < $deliveryStage->sort_order) {
+                throw new \RuntimeException('Items can only be returned once the transaction has reached the delivery stage.');
+            }
+
+            if ($this->isLegacyDeducted()) {
+                throw new \RuntimeException('This transaction was deducted in full the old way and has no delivery records to return from.');
+            }
+
+            if ($rows->isEmpty()) {
+                throw new \RuntimeException('Enter a quantity for at least one item.');
+            }
+
+            $lines = $this->linesWithDelivered();
+
+            // 1. Validate every line before touching anything.
+            foreach ($rows as $row) {
+                $line = $lines->get($row['transaction_item_id'])
+                    ?? throw new \RuntimeException('One of the items does not belong to this transaction.');
+
+                $delivered = (int) $line->delivered_quantity;
+                $label     = $this->lineLabel($line);
+
+                if ($row['quantity'] > $delivered) {
+                    throw new \RuntimeException(
+                        "Only {$delivered} delivered for {$label}, so you can't return {$row['quantity']}."
+                    );
+                }
+
+                if ($row['written_off'] > $row['quantity']) {
+                    throw new \RuntimeException("For {$label}, the not-restockable quantity can't exceed the returned quantity.");
+                }
+
+                if ($row['written_off'] > 0 && ! $row['reason']) {
+                    throw new \RuntimeException("Choose a reason for the units of {$label} that can't go back into stock.");
+                }
+
+                if ($row['reason'] && ! array_key_exists($row['reason'], Delivery::RETURN_REASONS)) {
+                    throw new \RuntimeException("Unknown return reason for {$label}.");
+                }
+
+                if (! $row['replace'] && $line->quantity - $row['quantity'] < 0) {
+                    throw new \RuntimeException("The order for {$label} can't go below zero.");
+                }
+            }
+
+            // 2. Save: one return document, one ledger row per outcome per line.
+            $variants = $this->lockVariants($rows->map(fn ($r) => $lines[$r['transaction_item_id']]->item_variant_id));
+
+            $delivery = $this->deliveries()->create([
+                'delivered_by'  => $returnedBy,
+                'delivered_at'  => now(),
+                'note'          => $note,
+                'is_return'     => true,
+                'request_token' => $token,
+            ]);
+
+            $cancelledAny = false;
+
+            foreach ($rows as $row) {
+                $line       = $lines[$row['transaction_item_id']];
+                $variant    = $variants->get($line->item_variant_id);
+                $writtenOff = $row['written_off'];
+                $restock    = $row['quantity'] - $writtenOff;
+
+                $ctx = [
+                    'transaction_id' => $this->id,
+                    'delivery_id'    => $delivery->id,
+                    'user_id'        => $returnedBy,
+                    'reference'      => "Transaction: {$this->name}",
+                    'note'           => $note,
+                ];
+
+                if ($variant) {
+                    if ($restock > 0) {
+                        $variant->applyStock($restock, StockMovement::TYPE_RETURN, $ctx);
+                    }
+
+                    if ($writtenOff > 0) {
+                        $variant->applyStock(0, StockMovement::TYPE_WRITE_OFF, $ctx + [
+                            'written_off' => $writtenOff,
+                            'reason'      => $row['reason'],
+                        ]);
+                    }
+                }
+
+                $delivery->items()->create([
+                    'transaction_item_id'  => $row['transaction_item_id'],
+                    'quantity'             => -$row['quantity'],
+                    'written_off_quantity' => $writtenOff,
+                    'reason'               => $writtenOff > 0 ? $row['reason'] : null,
+                    'needs_replacement'    => $row['replace'],
+                ]);
+
+                // No replacement: the customer no longer wants these units, so the order shrinks.
+                if (! $row['replace']) {
+                    TransactionItem::whereKey($line->id)->decrement('quantity', $row['quantity']);
+                    $cancelledAny = true;
+                }
+            }
+
+            // Keep the stored amount in sync with the reduced order.
+            if ($cancelledAny) {
+                $this->unsetRelation('items');
+                $this->update([
+                    'amount' => $this->items()->get()->sum(fn ($i) => $i->quantity * $i->unit_price),
+                ]);
+            }
+
+            return $delivery;
+        });
+    }
+
+    /**
+     * Close out everything that is still delivered (used when a deal is lost).
+     * History is always kept: a "return" delivery is added, nothing is wiped.
+     *
+     * @param bool $restock true  → units go back on the shelf
+     *                      false → units are written off (stock unchanged), $reason is kept
+     */
+    public function returnOutstanding(bool $restock = true, ?int $by = null, ?string $reason = null, ?string $note = null): void
+    {
+        if (! $this->stock_deducted_at) {
+            return; // nothing was deducted
+        }
+
+        DB::transaction(function () use ($restock, $by, $reason, $note) {
+            $ctx = fn (array $extra = []) => $extra + [
+                'transaction_id' => $this->id,
+                'user_id'        => $by,
+                'reference'      => "Transaction: {$this->name}",
+                'reason'         => $restock ? null : $reason,
+                'note'           => $note,
+            ];
+
+            // Old behaviour: the whole order was deducted at once.
+            if ($this->isLegacyDeducted()) {
+                $lines    = $this->items()->get();
+                $variants = $this->lockVariants($lines->pluck('item_variant_id'));
+
+                foreach ($lines as $line) {
+                    if ($variant = $variants->get($line->item_variant_id)) {
+                        $this->settleVariant($variant, (int) $line->quantity, $restock, $ctx());
+                    }
+                }
+
+                $this->update(['stock_deducted_at' => null]);
+
+                return;
+            }
+
+            // delivered_quantity is a net sum (returns are negative), so this is only what is still out.
+            $out = $this->linesWithDelivered()->filter(fn ($l) => (int) $l->delivered_quantity > 0);
+
+            if ($out->isEmpty()) {
+                return;
+            }
+
+            $variants = $this->lockVariants($out->pluck('item_variant_id'));
+
+            $delivery = $this->deliveries()->create([
+                'delivered_by' => $by,
+                'delivered_at' => now(),
+                'note'         => $note,
+                'is_return'    => true,
+            ]);
+
+            foreach ($out as $line) {
+                $qty = (int) $line->delivered_quantity;
+
+                $delivery->items()->create([
+                    'transaction_item_id'  => $line->id,
+                    'quantity'             => -$qty,
+                    'written_off_quantity' => $restock ? 0 : $qty,
+                    'reason'               => $restock ? null : $reason,
+                ]);
+
+                if ($variant = $variants->get($line->item_variant_id)) {
+                    $this->settleVariant($variant, $qty, $restock, $ctx(['delivery_id' => $delivery->id]));
+                }
+            }
+        });
+    }
+
     public function getTotalAttribute(): float
     {
         return $this->items->sum(fn ($item) => $item->quantity * $item->unit_price);
+    }
+
+    /* ------------------------------- Helpers ------------------------------- */
+
+    private function settleVariant(ItemVariant $variant, int $qty, bool $restock, array $ctx): void
+    {
+        if ($restock) {
+            $variant->applyStock($qty, StockMovement::TYPE_RETURN, $ctx);
+        } else {
+            $variant->applyStock(0, StockMovement::TYPE_WRITE_OFF, $ctx + ['written_off' => $qty]);
+        }
+    }
+
+    /** Clean the submitted rows: ints only, no zero rows, duplicates merged. */
+    private function normalizeRows(array $rows): Collection
+    {
+        return collect($rows)
+            ->map(fn ($r) => [
+                'transaction_item_id' => (int) ($r['transaction_item_id'] ?? 0),
+                'quantity'            => (int) ($r['quantity'] ?? 0),
+                'written_off'         => (int) ($r['written_off'] ?? 0),
+                'reason'              => ! empty($r['reason']) ? (string) $r['reason'] : null,
+                'replace'             => array_key_exists('replace', $r)
+                    ? filter_var($r['replace'], FILTER_VALIDATE_BOOLEAN)
+                    : true,
+            ])
+            ->filter(fn ($r) => $r['quantity'] > 0)
+            ->groupBy('transaction_item_id')
+            ->map(fn ($group, $id) => [
+                'transaction_item_id' => (int) $id,
+                'quantity'            => (int) $group->sum('quantity'),
+                'written_off'         => (int) $group->sum('written_off'),
+                'reason'              => $group->pluck('reason')->filter()->first(),
+                'replace'             => $group->every(fn ($r) => $r['replace']),
+            ])
+            ->values();
+    }
+
+    /** Lock this row so two simultaneous deliveries can't both pass the "remaining" check. */
+    private function lockAndRefresh(): void
+    {
+        static::whereKey($this->getKey())->lockForUpdate()->firstOrFail();
+        $this->refresh();
+    }
+
+    private function linesWithDelivered(): Collection
+    {
+        return $this->items()
+            ->withSum('deliveryItems as delivered_quantity', 'quantity')
+            ->get()
+            ->keyBy('id');
+    }
+
+    /** Lock variants in id order (prevents deadlocks between two requests). */
+    private function lockVariants(Collection $variantIds): Collection
+    {
+        return ItemVariant::whereIn('id', $variantIds->unique()->values())
+            ->orderBy('id')
+            ->lockForUpdate()
+            ->get()
+            ->keyBy('id');
+    }
+
+    private function lineLabel(?TransactionItem $line): string
+    {
+        if (! $line) {
+            return 'an item';
+        }
+
+        return trim(($line->item_name ?? 'an item') . ($line->brand_name ? " ({$line->brand_name})" : ''));
+    }
+
+    public function quotations(): HasMany { return $this->hasMany(Quotation::class, 'transaction_id'); }
+
+    public function clientPurchaseOrders(): HasMany
+    {
+        return $this->hasMany(ClientPurchaseOrder::class, 'transaction_id');
+    }
+
+    /** A draft client PO must be confirmed before the card leaves its stage. */
+    public function clientPoBlocksProgress(): bool
+    {
+        return $this->clientPurchaseOrders()->where('status', 'draft')->exists();
     }
 }

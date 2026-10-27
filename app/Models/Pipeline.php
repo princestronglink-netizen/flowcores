@@ -3,8 +3,6 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
-use App\Models\PipelineStage;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Pipeline extends Model
@@ -25,5 +23,17 @@ class Pipeline extends Model
     public function transactions(): HasMany
     {
         return $this->hasMany(Transaction::class);
+    }
+
+    /** There is one pipeline: the oldest. */
+    public static function default(): self
+    {
+        return static::orderBy('id')->firstOrFail();
+    }
+
+    public function initialStage(): ?PipelineStage
+    {
+        return $this->stages()->where('is_initial', true)->first()
+            ?? $this->stages()->orderBy('sort_order')->first();
     }
 }
