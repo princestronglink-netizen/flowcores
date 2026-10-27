@@ -76,15 +76,71 @@ class QuotationController extends Controller
         $rows = $this->buildItemRows($v['items']);
 
         DB::transaction(function () use ($v, $rows, $quotation) {
-            $quotation->update($this->fields($v) + [
+            $new = $this->fields($v) + [
                 'amount' => collect($rows)->sum(fn ($r) => $r['quantity'] * $r['unit_price']),
-            ]);
+            ];
+
+            // Only a real change creates a new version (saving without edits does nothing).
+            if ($this->hasChanges($quotation, $new, $rows)) {
+                $quotation->versions()->create([
+                    'version'          => $quotation->version,
+                    'quotation_number' => $quotation->quotation_number,
+                    'snapshot'         => $quotation->snapshot(),
+                    'edited_by'        => auth()->id(),
+                ]);
+
+                $next                    = $quotation->version + 1;
+                $new['version']          = $next;
+                $new['quotation_number'] = $quotation->baseNumber() . '-' . $next;
+            }
+
+            $quotation->update($new);
 
             $quotation->items()->delete();
             $quotation->items()->createMany($rows);
         });
 
         return redirect()->route('quotations.index');
+    }
+
+    /** Compare the saved quotation with the submitted data (header fields and line items). */
+    private function hasChanges(Quotation $quotation, array $new, array $rows): bool
+    {
+        $quotation->load('items');
+
+        $header = fn (array $d) => [
+            (string) $d['subject'],
+            (string) $d['client_id'],
+            (string) $d['client_contact_person_id'],
+            (string) ($d['valid_until'] ?? ''),
+            (string) ($d['note'] ?? ''),
+            (string) ($d['terms'] ?? ''),
+        ];
+
+        $old = [
+            'subject'                  => $quotation->subject,
+            'client_id'                => $quotation->client_id,
+            'client_contact_person_id' => $quotation->client_contact_person_id,
+            'valid_until'              => $quotation->valid_until?->toDateString(),
+            'note'                     => $quotation->note,
+            'terms'                    => $quotation->terms,
+        ];
+
+        if ($header($old) !== $header($new)) {
+            return true;
+        }
+
+        $sig = fn ($items) => collect($items)
+            ->map(fn ($i) => [
+                (int) $i['item_variant_id'],
+                (int) $i['quantity'],
+                number_format((float) $i['unit_price'], 2, '.', ''),
+            ])
+            ->sortBy(fn ($r) => implode('|', $r))
+            ->values()
+            ->all();
+
+        return $sig($quotation->items->map->only(['item_variant_id', 'quantity', 'unit_price'])) !== $sig($rows);
     }
 
     public function destroy(Quotation $quotation)
