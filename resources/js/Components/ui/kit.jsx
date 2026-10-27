@@ -1,3 +1,5 @@
+import { twMerge } from 'tailwind-merge';
+import clsx from 'clsx';
 import { AlertTriangle, CheckCircle2, Info, XCircle } from 'lucide-react';
 
 /*
@@ -7,7 +9,8 @@ import { AlertTriangle, CheckCircle2, Info, XCircle } from 'lucide-react';
 export const BRAND = '#667292';
 export const BRAND_DARK = '#3a4157';
 
-export const cx = (...a) => a.filter(Boolean).join(' ');
+/** Joins class names and resolves Tailwind conflicts: the LAST conflicting class wins (e.g. w-full vs w-48). */
+export const cx = (...a) => twMerge(clsx(a));
 
 export const currency = (n) =>
     Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -17,7 +20,8 @@ export const currency = (n) =>
 export const inputCls =
     'block h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 shadow-sm transition ' +
     'placeholder:text-slate-400 focus:border-[#667292] focus:outline-none focus:ring-[3px] focus:ring-[#667292]/20 ' +
-    'disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500';
+    'disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500 ' +
+    '[&>option]:bg-white [&>option]:text-slate-900';
 const inputErr = 'border-red-400 focus:border-red-500 focus:ring-red-500/20';
 /** input(hasError) -> class string */
 export const input = (hasError) => cx(inputCls, hasError && inputErr);
