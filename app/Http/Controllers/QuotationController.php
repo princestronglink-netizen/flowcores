@@ -4,7 +4,9 @@ namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\HandlesLineItems;
 use App\Models\Client;
+use App\Models\ClientContactPerson;
 use App\Models\Quotation;
+use App\Models\QuotationVersion;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
@@ -28,14 +30,57 @@ class QuotationController extends Controller
             'quotation' => $quotation->load('items.variant.brand'),
             'clients'   => Client::with('contactPeople')->orderBy('client_name')->get(),
             'catalog'   => $this->catalog(),
+            // Older versions, newest first. The live row is always the latest version.
+            'versions'  => $quotation->versions()
+                ->with('editor:id,name')
+                ->get()
+                ->sortByDesc('version')
+                ->values()
+                ->map(fn (QuotationVersion $v) => [
+                    'id'               => $v->id,
+                    'version'          => $v->version,
+                    'version_label'    => $v->version > 0 ? "Version {$v->version}" : 'Initial',
+                    'quotation_number' => $v->quotation_number,
+                    'amount'           => $v->snapshot['amount'] ?? 0,
+                    'item_count'       => count($v->snapshot['items'] ?? []),
+                    'replaced_at'      => $v->created_at?->toIso8601String(),
+                    'edited_by'        => $v->editor?->name,
+                ]),
         ]);
     }
 
-    /** Printable / PDF-able view. */
+    /** Printable / PDF-able view of the current version. */
     public function print(Quotation $quotation)
     {
         return Inertia::render('Quotation/Print', [
             'quotation' => $quotation->load(['client', 'contactPerson', 'items']),
+        ]);
+    }
+
+    /** Printable view of an older version, rebuilt from its stored snapshot. */
+    public function printVersion(Quotation $quotation, QuotationVersion $version)
+    {
+        abort_unless($version->quotation_id === $quotation->id, 404);
+
+        $s = $version->snapshot;
+
+        return Inertia::render('Quotation/Print', [
+            'quotation' => [
+                'id'               => $version->id,
+                'quotation_number' => $version->quotation_number,
+                'subject'          => $s['subject'] ?? null,
+                'valid_until'      => $s['valid_until'] ?? null,
+                'amount'           => $s['amount'] ?? 0,
+                'note'             => $s['note'] ?? null,
+                'terms'            => $s['terms'] ?? null,
+                // The date printed on the sheet: when the quotation was first created.
+                'created_at'       => $quotation->created_at,
+                'client'           => Client::find($s['client_id'] ?? null),
+                'contact_person'   => ClientContactPerson::find($s['client_contact_person_id'] ?? null),
+                'items'            => collect($s['items'] ?? [])
+                    ->map(fn ($i) => $i + ['subtotal' => round($i['quantity'] * $i['unit_price'], 2)])
+                    ->all(),
+            ],
         ]);
     }
 
@@ -74,14 +119,19 @@ class QuotationController extends Controller
     {
         $v    = $request->validate($this->rules($request));
         $rows = $this->buildItemRows($v['items']);
+        $id   = $quotation->id;
 
-        DB::transaction(function () use ($v, $rows, $quotation) {
+        DB::transaction(function () use ($v, $rows, $id) {
+            // Lock the row so two people saving at once can't create the same version number.
+            $quotation = Quotation::whereKey($id)->lockForUpdate()->firstOrFail();
+
             $new = $this->fields($v) + [
                 'amount' => collect($rows)->sum(fn ($r) => $r['quantity'] * $r['unit_price']),
             ];
 
             // Only a real change creates a new version (saving without edits does nothing).
             if ($this->hasChanges($quotation, $new, $rows)) {
+                // 1. Keep the current state as an old version, with the number it has now.
                 $quotation->versions()->create([
                     'version'          => $quotation->version,
                     'quotation_number' => $quotation->quotation_number,
@@ -89,6 +139,7 @@ class QuotationController extends Controller
                     'edited_by'        => auth()->id(),
                 ]);
 
+                // 2. The live row becomes the next version: QT-2026-00012 -> -1 -> -2 -> -3 ...
                 $next                    = $quotation->version + 1;
                 $new['version']          = $next;
                 $new['quotation_number'] = $quotation->baseNumber() . '-' . $next;

@@ -53,10 +53,15 @@ class Quotation extends Model
         return $this->version > 0 ? "Version {$this->version}" : 'Initial';
     }
 
-    /** QT-2026-00012 (without any -1, -2 suffix). */
+    /**
+     * QT-2026-00012 (without any -1, -2 suffix).
+     * QT-2026-00012-3 -> QT-2026-00012
+     */
     public function baseNumber(): string
     {
-        return preg_replace('/-\d+$/', '', preg_replace('/^(QT-\d{4}-\d{5}).*$/', '$1', $this->quotation_number));
+        preg_match('/^(QT-\d{4}-\d+)(?:-\d+)?$/', (string) $this->quotation_number, $m);
+
+        return $m[1] ?? (string) $this->quotation_number;
     }
 
     /** Full copy of the current state, stored when a new version replaces it. */

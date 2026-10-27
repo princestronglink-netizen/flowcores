@@ -32,6 +32,9 @@ Route::middleware(['auth'])->group(function () {
     // ---- Quotations (created by the pipeline, so no create/store) ----
     Route::resource('quotations', QuotationController::class)->except(['show', 'create', 'store']);
     Route::get('quotations/{quotation}/print', [QuotationController::class, 'print'])->name('quotations.print');
+    // Print an older version of a quotation (rebuilt from its stored snapshot).
+    Route::get('quotations/{quotation}/versions/{version}/print', [QuotationController::class, 'printVersion'])
+        ->name('quotations.versions.print');
 
     // ---- Client purchase orders (created by the pipeline, so no create/store) ----
     Route::resource('client-purchase-orders', ClientPurchaseOrderController::class)->only(['index', 'edit', 'update', 'destroy']);

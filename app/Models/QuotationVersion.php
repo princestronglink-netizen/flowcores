@@ -15,4 +15,10 @@ class QuotationVersion extends Model
     {
         return $this->belongsTo(Quotation::class);
     }
+
+    /** Who made the edit that replaced this version. */
+    public function editor(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'edited_by');
+    }
 }
