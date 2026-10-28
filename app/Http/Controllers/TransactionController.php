@@ -53,8 +53,8 @@ class TransactionController extends Controller
             'transaction' => $transaction,
             'clients'     => Client::with('contactPeople')->orderBy('client_name')->get(),
             'catalog'     => $this->catalog(),
-            // Same rule update() uses: once anything was delivered (or deducted the old way), items are frozen.
-            'itemsLocked' => $transaction->deliveries()->exists() || $transaction->isLegacyDeducted(),
+            // Same rule update() uses: once anything was delivered, items are frozen.
+            'itemsLocked' => $transaction->deliveries()->exists(),
             // Older quotation versions (the current one is the transaction itself), newest first.
             'versions'    => $transaction->quotationVersions()
                 ->with('editor:id,name')
@@ -212,9 +212,9 @@ class TransactionController extends Controller
             'vat_percent'              => $validated['vat_percent'],
         ];
 
-        // Once anything has been delivered (or deducted the old way), the items are
-        // locked: replacing them would erase the delivery records.
-        $itemsLocked = $transaction->deliveries()->exists() || $transaction->isLegacyDeducted();
+        // Once anything has been delivered, the items are locked:
+        // replacing them would erase the delivery records.
+        $itemsLocked = $transaction->deliveries()->exists();
 
         // Creates the next quotation version when something printed on it really changed.
         $newVersion = $transaction->saveEdit($fields, $itemsLocked ? null : $itemRows, auth()->id());

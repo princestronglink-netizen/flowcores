@@ -52,6 +52,9 @@ Route::middleware(['auth'])->group(function () {
         ->name('transactions.deliveries.store');
     Route::post('transactions/{transaction}/deliveries/return', [DeliveryController::class, 'returnItems'])
         ->name('transactions.deliveries.return');
+    // DR softcopy (private file, only served to logged-in users)
+    Route::get('deliveries/{delivery}/dr-file', [DeliveryController::class, 'drFile'])
+        ->name('deliveries.dr-file');
 
     // ---- Quick-create endpoints used inside forms ----
     Route::post('clients/quick-create', [ClientController::class, 'quickStore'])->name('clients.quickStore');

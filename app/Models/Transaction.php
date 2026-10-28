@@ -28,14 +28,14 @@ class Transaction extends Model
         'amount',
         'markup_percent',
         'vat_percent',
-        'note',
-        'stock_deducted_at', // set on the first delivery; null when nothing has been delivered
+        'remarks',              // printed on the quotation
+        'prepared_by',          // printed on the quotation
+        'prepared_by_position', // printed on the quotation
     ];
 
     protected $casts = [
-        'stock_deducted_at' => 'datetime',
-        'markup_percent'    => 'float',
-        'vat_percent'       => 'float',
+        'markup_percent' => 'float',
+        'vat_percent'    => 'float',
     ];
 
     // `total` is the grand total (subtotal + markup + VAT). The rest feed the breakdown in the UI.
@@ -234,22 +234,9 @@ class Transaction extends Model
         return $this->pipeline->stages()->where('deducts_stock', true)->exists();
     }
 
-    /**
-     * Old transactions had their whole order deducted at once (stock_deducted_at set,
-     * no delivery records). Treat those as fully delivered.
-     */
-    public function isLegacyDeducted(): bool
-    {
-        return $this->stock_deducted_at !== null && ! $this->deliveries()->exists();
-    }
-
     /** Net delivered quantity (deliveries minus returns). */
     public function deliveredQuantity(): int
     {
-        if ($this->isLegacyDeducted()) {
-            return (int) $this->items()->sum('quantity');
-        }
-
         return (int) DeliveryItem::whereIn('delivery_id', $this->deliveries()->select('id'))->sum('quantity');
     }
 
@@ -260,10 +247,6 @@ class Transaction extends Model
 
     public function isFullyDelivered(): bool
     {
-        if ($this->isLegacyDeducted()) {
-            return true;
-        }
-
         return $this->items()
             ->withSum('deliveryItems as delivered_quantity', 'quantity')
             ->get()
@@ -285,15 +268,22 @@ class Transaction extends Model
      * $token is a one-time id sent by the browser. If the same token arrives twice
      * (double click, network retry) the first delivery is returned and nothing changes.
      *
+     * $dr is the optional delivery receipt: ['dr_number' => ?string, 'dr_file_path' => ?string, 'dr_file_name' => ?string]
+     *
      * @param  array<int, array{transaction_item_id:int, quantity:int}>  $rows
      * @throws InsufficientStockException  stock is short (nothing is saved)
      * @throws \RuntimeException           the delivery isn't allowed (nothing is saved)
      */
-    public function recordDelivery(array $rows, ?int $deliveredBy = null, ?string $note = null, ?string $token = null): Delivery
-    {
+    public function recordDelivery(
+        array $rows,
+        ?int $deliveredBy = null,
+        ?string $note = null,
+        ?string $token = null,
+        array $dr = [] // DR
+    ): Delivery {
         $rows = $this->normalizeRows($rows);
 
-        return DB::transaction(function () use ($rows, $deliveredBy, $note, $token) {
+        return DB::transaction(function () use ($rows, $deliveredBy, $note, $token, $dr) {
             $this->lockAndRefresh();
 
             // Same request sent twice: return the first result, change nothing.
@@ -307,10 +297,6 @@ class Transaction extends Model
 
             if (! $this->stage?->deducts_stock) {
                 throw new \RuntimeException('Deliveries can only be recorded in the delivery stage.');
-            }
-
-            if ($this->isLegacyDeducted()) {
-                throw new \RuntimeException('Stock for this transaction was already deducted in full.');
             }
 
             if ($rows->isEmpty()) {
@@ -357,6 +343,9 @@ class Transaction extends Model
                 'delivered_by'  => $deliveredBy,
                 'delivered_at'  => now(),
                 'note'          => $note,
+                'dr_number'     => $dr['dr_number'] ?? null,     // DR
+                'dr_file_path'  => $dr['dr_file_path'] ?? null,  // DR
+                'dr_file_name'  => $dr['dr_file_name'] ?? null,  // DR
                 'is_return'     => false,
                 'request_token' => $token,
             ]);
@@ -366,7 +355,7 @@ class Transaction extends Model
                     'transaction_id' => $this->id,
                     'delivery_id'    => $delivery->id,
                     'user_id'        => $deliveredBy,
-                    'reference'      => "Transaction: {$this->name}",
+                    'reference'      => "Transaction: {$this->name}" . (! empty($dr['dr_number']) ? " · DR {$dr['dr_number']}" : ''), // DR
                     'note'           => $note,
                 ]);
             }
@@ -377,8 +366,6 @@ class Transaction extends Model
                     'quantity'            => $row['quantity'],
                 ]);
             }
-
-            $this->update(['stock_deducted_at' => $this->stock_deducted_at ?? now()]);
 
             return $delivery;
         });
@@ -419,10 +406,6 @@ class Transaction extends Model
 
             if (! $deliveryStage || ! $this->stage || $this->stage->sort_order < $deliveryStage->sort_order) {
                 throw new \RuntimeException('Items can only be returned once the transaction has reached the delivery stage.');
-            }
-
-            if ($this->isLegacyDeducted()) {
-                throw new \RuntimeException('This transaction was deducted in full the old way and has no delivery records to return from.');
             }
 
             if ($rows->isEmpty()) {
@@ -535,8 +518,8 @@ class Transaction extends Model
      */
     public function returnOutstanding(bool $restock = true, ?int $by = null, ?string $reason = null, ?string $note = null): void
     {
-        if (! $this->stock_deducted_at) {
-            return; // nothing was deducted
+        if (! $this->deliveries()->exists()) {
+            return; // nothing was ever delivered
         }
 
         DB::transaction(function () use ($restock, $by, $reason, $note) {
@@ -547,22 +530,6 @@ class Transaction extends Model
                 'reason'         => $restock ? null : $reason,
                 'note'           => $note,
             ];
-
-            // Old behaviour: the whole order was deducted at once.
-            if ($this->isLegacyDeducted()) {
-                $lines    = $this->items()->get();
-                $variants = $this->lockVariants($lines->pluck('item_variant_id'));
-
-                foreach ($lines as $line) {
-                    if ($variant = $variants->get($line->item_variant_id)) {
-                        $this->settleVariant($variant, (int) $line->quantity, $restock, $ctx());
-                    }
-                }
-
-                $this->update(['stock_deducted_at' => null]);
-
-                return;
-            }
 
             // delivered_quantity is a net sum (returns are negative), so this is only what is still out.
             $out = $this->linesWithDelivered()->filter(fn ($l) => (int) $l->delivered_quantity > 0);

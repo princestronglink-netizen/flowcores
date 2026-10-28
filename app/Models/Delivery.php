@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Delivery extends Model
 {
-    /** Why returned goods were NOT put back into stock. Keep in sync with returnReasons.js. */
+    /** Keep in sync with resources/js/Components/Pipeline/returnReasons.js */
     public const RETURN_REASONS = [
         'damaged'   => 'Damaged',
         'defective' => 'Defective',
@@ -22,6 +22,9 @@ class Delivery extends Model
         'delivered_by',
         'delivered_at',
         'note',
+        'dr_number',      // DR
+        'dr_file_path',   // DR
+        'dr_file_name',   // DR
         'is_return',
         'request_token',
     ];
@@ -31,18 +34,27 @@ class Delivery extends Model
         'is_return'    => 'boolean',
     ];
 
+    // DR: never send the storage path to the browser, send a URL instead.
+    protected $hidden  = ['dr_file_path'];
+    protected $appends = ['dr_file_url'];
+
+    public function getDrFileUrlAttribute(): ?string
+    {
+        return $this->dr_file_path ? route('deliveries.dr-file', $this->id) : null;
+    }
+
     public function transaction(): BelongsTo
     {
         return $this->belongsTo(Transaction::class);
     }
 
-    public function deliverer(): BelongsTo
-    {
-        return $this->belongsTo(User::class, 'delivered_by');
-    }
-
     public function items(): HasMany
     {
         return $this->hasMany(DeliveryItem::class);
+    }
+
+    public function deliverer(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'delivered_by');
     }
 }

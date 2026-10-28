@@ -6,6 +6,7 @@ use App\Exceptions\InsufficientStockException;
 use App\Models\Delivery;
 use App\Models\Transaction;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 
 class DeliveryController extends Controller
 {
@@ -17,6 +18,15 @@ class DeliveryController extends Controller
             'items'                       => 'required|array|min:1',
             'items.*.transaction_item_id' => 'required|integer',
             'items.*.quantity'            => 'required|integer|min:0',
+        ];
+    }
+
+    /** DR: optional delivery receipt number + softcopy. Deliveries only, not returns. */
+    private function drRules(): array
+    {
+        return [
+            'dr_number' => 'nullable|string|max:60',
+            'dr_file'   => 'nullable|file|mimes:pdf,jpg,jpeg,png,webp|max:10240', // 10 MB
         ];
     }
 
@@ -45,20 +55,42 @@ class DeliveryController extends Controller
     /** Record a (full or partial) delivery. The card never moves because of this. */
     public function store(Request $request, Transaction $transaction)
     {
-        $validated = $request->validate($this->rules());
+        $validated = $request->validate($this->rules() + $this->drRules()); // DR
+
+        // DR: save the softcopy on the private disk first; it is removed again if the delivery fails.
+        $file = $request->file('dr_file');
+        $path = $file?->store("delivery-receipts/{$transaction->id}", 'local');
 
         try {
-            $transaction->recordDelivery(
+            $delivery = $transaction->recordDelivery(
                 $validated['items'],
                 auth()->id(),
                 $validated['note'] ?? null,
                 $validated['request_token'] ?? null,
+                [ // DR
+                    'dr_number'    => filled($validated['dr_number'] ?? null) ? trim($validated['dr_number']) : null,
+                    'dr_file_path' => $path,
+                    'dr_file_name' => $file?->getClientOriginalName(),
+                ],
             );
         } catch (InsufficientStockException $e) {
+            $this->discardFile($path); // DR
+
             // Shown inside the modal, which stays open. Nothing was saved.
             return back()->withErrors(['items' => 'Delivery not recorded. ' . $e->getMessage()]);
         } catch (\RuntimeException $e) {
+            $this->discardFile($path); // DR
+
             return back()->withErrors(['items' => $e->getMessage()]);
+        } catch (\Throwable $e) {
+            $this->discardFile($path); // DR
+
+            throw $e;
+        }
+
+        // DR: a double click / network retry returned the first delivery, so the new file is not used.
+        if (! $delivery->wasRecentlyCreated) {
+            $this->discardFile($path);
         }
 
         [$ordered, $delivered] = $this->totals($transaction);
@@ -109,5 +141,24 @@ class DeliveryController extends Controller
         }
 
         return back()->with('stock_returned', $message);
+    }
+
+    /** DR: the softcopy is private, so it is only served to logged-in users (route is in the auth group). */
+    public function drFile(Delivery $delivery)
+    {
+        abort_unless(
+            $delivery->dr_file_path && Storage::disk('local')->exists($delivery->dr_file_path),
+            404
+        );
+
+        return Storage::disk('local')->response($delivery->dr_file_path, $delivery->dr_file_name);
+    }
+
+    /** DR: delete an uploaded softcopy that is not going to be used. */
+    private function discardFile(?string $path): void
+    {
+        if ($path) {
+            Storage::disk('local')->delete($path);
+        }
     }
 }

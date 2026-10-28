@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useForm } from '@inertiajs/react';
 import Modal from '@/Components/Modal';
 import { Button } from '@/Components/ui/Button';
@@ -8,14 +8,17 @@ import {
     ArrowLeft,
     Ban,
     CheckCircle2,
+    FileText,
     History,
     Minus,
     PackageCheck,
     PackageX,
+    Paperclip,
     Plus,
     RefreshCw,
     Truck,
     Undo2,
+    X,
 } from 'lucide-react';
 import { RETURN_REASONS, reasonLabel } from './returnReasons';
 
@@ -24,6 +27,8 @@ import { RETURN_REASONS, reasonLabel } from './returnReasons';
 const deliveredOf = (line) => Number(line.delivered_quantity ?? 0);
 const remainingOf = (line) => Math.max(0, line.quantity - deliveredOf(line));
 const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
+
+const MAX_DR_BYTES = 10 * 1024 * 1024; // keep in sync with max:10240 on the server
 
 const formatDate = (value) =>
     value ? new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '';
@@ -168,6 +173,8 @@ function Banner({ tone = 'error', children }) {
  * Return rows, per line:
  *   condition  good | partial | bad   → how many go back on the shelf vs. are written off
  *   replace    true | false           → units stay owed (replacement) or the order shrinks
+ *
+ * Deliveries can also carry a DR number and a DR softcopy (PDF / image). Returns do not.
  */
 export default function DeliveryModal({ transaction, mode = 'deliver', movesBackTo = null, onClose, onCancel }) {
     const isHistory = mode === 'history';
@@ -177,8 +184,13 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
     const [step, setStep] = useState('edit'); // returns only: 'edit' → 'review'
     const reviewing = isReturn && step === 'review';
 
+    const fileRef = useRef(null);
+    const [fileNotice, setFileNotice] = useState(null);
+
     const { data, setData, post, processing, errors, reset, clearErrors, transform } = useForm({
         note: '',
+        dr_number: '',
+        dr_file: null,
         request_token: '',
         items: [],
     });
@@ -195,9 +207,21 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
             replace: true,
         }));
 
+    const clearFileInput = () => {
+        if (fileRef.current) fileRef.current.value = '';
+    };
+
     useEffect(() => {
         if (!transaction) return;
-        setData({ note: '', request_token: newToken(), items: buildRows(!isReturn && !isHistory) }); // deliver is prefilled with what remains
+        setData({
+            note: '',
+            dr_number: '',
+            dr_file: null,
+            request_token: newToken(),
+            items: buildRows(!isReturn && !isHistory), // deliver is prefilled with what remains
+        });
+        clearFileInput();
+        setFileNotice(null);
         setStep('edit');
         clearErrors();
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -225,6 +249,28 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
     };
 
     const setAll = (fill, condition) => setData('items', buildRows(fill, condition));
+
+    /* ---- DR file ---- */
+    const pickFile = (e) => {
+        const f = e.target.files?.[0] ?? null;
+        setFileNotice(null);
+
+        if (f && f.size > MAX_DR_BYTES) {
+            e.target.value = '';
+            setData('dr_file', null);
+            setFileNotice('That file is larger than 10 MB. Choose a smaller PDF or image.');
+            return;
+        }
+
+        setData('dr_file', f);
+        clearErrors('dr_file');
+    };
+
+    const removeFile = () => {
+        setData('dr_file', null);
+        setFileNotice(null);
+        clearFileInput();
+    };
 
     /* ---- live summary ---- */
     const ordered = lines.reduce((s, l) => s + l.quantity, 0);
@@ -290,24 +336,36 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
             return;
         }
 
-        transform((d) => ({
-            note: d.note,
-            request_token: d.request_token,
-            items: d.items.map((r) => {
-                const row = { transaction_item_id: r.transaction_item_id, quantity: Number(r.quantity) || 0 };
-                if (isReturn) {
-                    row.written_off = notRestockedOf(r);
-                    row.reason = row.written_off > 0 ? r.reason : null;
-                    row.replace = r.replace !== false;
-                }
-                return row;
-            }),
-        }));
+        transform((d) => {
+            const payload = {
+                note: d.note,
+                request_token: d.request_token,
+                items: d.items.map((r) => {
+                    const row = { transaction_item_id: r.transaction_item_id, quantity: Number(r.quantity) || 0 };
+                    if (isReturn) {
+                        row.written_off = notRestockedOf(r);
+                        row.reason = row.written_off > 0 ? r.reason : null;
+                        row.replace = r.replace !== false;
+                    }
+                    return row;
+                }),
+            };
+
+            // DR fields belong to deliveries only. Inertia switches to FormData when a file is present.
+            if (!isReturn) {
+                payload.dr_number = d.dr_number;
+                if (d.dr_file) payload.dr_file = d.dr_file;
+            }
+
+            return payload;
+        });
 
         post(route(isReturn ? 'transactions.deliveries.return' : 'transactions.deliveries.store', transaction.id), {
             preserveScroll: true,
+            forceFormData: !isReturn,
             onSuccess: () => {
                 reset();
+                clearFileInput();
                 onClose();
             },
             // Keep everything the user typed and show the server's message.
@@ -315,13 +373,20 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
         });
     };
 
-    const dirty = !isHistory && (data.note !== '' || (isReturn && now > 0));
+    const dirty =
+        !isHistory &&
+        (data.note !== '' ||
+            data.dr_number !== '' ||
+            data.dr_file !== null ||
+            (isReturn && now > 0));
 
     const close = () => {
         if (processing) return;
         if (dirty && !window.confirm('Discard this entry? Nothing has been saved yet.')) return;
         reset();
         clearErrors();
+        clearFileInput();
+        setFileNotice(null);
         onCancel();
     };
 
@@ -391,6 +456,28 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
                                                 </span>
                                                 <span className="text-xs text-muted-foreground">{formatDate(d.delivered_at)}</span>
                                             </div>
+
+                                            {/* DR number + softcopy */}
+                                            {(d.dr_number || d.dr_file_url) && (
+                                                <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[#3a4157]">
+                                                    {d.dr_number && (
+                                                        <span>
+                                                            DR no. <b>{d.dr_number}</b>
+                                                        </span>
+                                                    )}
+                                                    {d.dr_file_url && (
+                                                        <a
+                                                            href={d.dr_file_url}
+                                                            target="_blank"
+                                                            rel="noreferrer"
+                                                            className="inline-flex items-center gap-1 font-medium text-[#667292] hover:underline"
+                                                        >
+                                                            <Paperclip className="size-3" />
+                                                            {d.dr_file_name ?? 'View DR'}
+                                                        </a>
+                                                    )}
+                                                </p>
+                                            )}
 
                                             <ul className="mt-3 space-y-2 text-sm">
                                                 {(d.items ?? []).map((it) => {
@@ -772,6 +859,61 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
                                         <> The card goes back to <b>{movesBackTo}</b>.</>
                                     )}
                                 </p>
+                            </div>
+                        )}
+
+                        {/* ===================== DR number + softcopy (deliveries only) ===================== */}
+                        {!isHistory && !nothingToDo && !isReturn && (
+                            <div className="space-y-3 rounded-lg border border-[#bccad6] p-3.5">
+                                <p className="flex items-center gap-1.5 text-sm font-medium text-[#3a4157]">
+                                    <FileText className="size-4 text-[#667292]" />
+                                    Delivery receipt (DR)
+                                </p>
+
+                                <div className="grid gap-3 sm:grid-cols-2">
+                                    <div>
+                                        <label htmlFor="dr_number" className="block text-xs font-medium text-[#667292]">
+                                            DR number
+                                        </label>
+                                        <input
+                                            id="dr_number"
+                                            type="text"
+                                            maxLength={60}
+                                            placeholder="Optional, e.g. DR-000123"
+                                            value={data.dr_number}
+                                            onChange={(e) => setData('dr_number', e.target.value)}
+                                            className={`mt-1 ${selectClass}`}
+                                        />
+                                        {errors.dr_number && <p className="mt-1 text-xs text-red-600">{errors.dr_number}</p>}
+                                    </div>
+
+                                    <div>
+                                        <label htmlFor="dr_file" className="block text-xs font-medium text-[#667292]">
+                                            DR softcopy
+                                        </label>
+                                        <input
+                                            ref={fileRef}
+                                            id="dr_file"
+                                            type="file"
+                                            accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/*"
+                                            onChange={pickFile}
+                                            className="mt-1 block w-full text-sm text-[#3a4157] file:mr-3 file:rounded-md file:border-0 file:bg-[#eef1f5] file:px-3 file:py-2 file:text-xs file:font-medium file:text-[#667292] hover:file:bg-[#e2e7ee]"
+                                        />
+                                        <p className="mt-1 text-xs text-muted-foreground">PDF or image, up to 10 MB.</p>
+
+                                        {data.dr_file && (
+                                            <button
+                                                type="button"
+                                                onClick={removeFile}
+                                                className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-red-600 hover:underline"
+                                            >
+                                                <X className="size-3" /> Remove {data.dr_file.name}
+                                            </button>
+                                        )}
+                                        {fileNotice && <p className="mt-1 text-xs text-red-600">{fileNotice}</p>}
+                                        {errors.dr_file && <p className="mt-1 text-xs text-red-600">{errors.dr_file}</p>}
+                                    </div>
+                                </div>
                             </div>
                         )}
 

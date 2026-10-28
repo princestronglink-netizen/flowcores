@@ -79,7 +79,7 @@ class TransactionQuotationController extends Controller
             return back()->withErrors(['restore' => 'The quotation was already sent (the card is past the quotation stage). Move the card back to the quotation stage to change it.']);
         }
 
-        if ($transaction->deliveries()->exists() || $transaction->isLegacyDeducted()) {
+        if ($transaction->deliveries()->exists()) {
             return back()->withErrors(['restore' => 'Items are locked because goods were delivered, so an older version cannot be restored.']);
         }
 
