@@ -72,27 +72,35 @@ const rowProblem = (row, line) => {
 };
 
 const field =
-    'block w-full rounded-md border border-[#bccad6] bg-white px-2.5 py-1.5 text-sm focus:border-[#667292] focus:outline-none focus:ring-2 focus:ring-[#8d9db6]/40';
+    'block w-full rounded-lg border border-[#c9d6e5] bg-white px-4 py-3 text-base text-[#12306b] placeholder:text-[#8aa0bf] focus:border-[#1b4a7d] focus:outline-none focus:ring-2 focus:ring-[#1b4a7d]/20';
+
+// Smaller version used inside the return rows.
+const fieldSm =
+    'block w-full rounded-md border border-[#c9d6e5] bg-white px-2.5 py-1.5 text-sm focus:border-[#1b4a7d] focus:outline-none focus:ring-2 focus:ring-[#1b4a7d]/20';
 
 const chip =
-    'rounded-full border border-[#bccad6] px-2.5 py-0.5 text-xs font-medium text-[#667292] transition hover:bg-[#eef1f5]';
+    'rounded-lg border border-[#c9d6e5] bg-white px-4 py-2 text-sm font-semibold text-[#12306b] transition hover:bg-[#eef3fa]';
 
 const stepBtn =
-    'flex size-7 items-center justify-center text-[#667292] transition hover:bg-[#eef1f5] focus:outline-none focus-visible:bg-[#eef1f5] disabled:pointer-events-none disabled:opacity-30';
+    'flex size-7 items-center justify-center text-[#1b4a7d] transition hover:bg-[#eef3fa] focus:outline-none focus-visible:bg-[#eef3fa] disabled:pointer-events-none disabled:opacity-30';
+
+const stepBtnLg =
+    'flex h-11 w-11 items-center justify-center text-[#1b4a7d] transition hover:bg-[#eef3fa] focus:outline-none focus-visible:bg-[#eef3fa] disabled:pointer-events-none disabled:opacity-30';
 
 // Item | Ordered | Delivered | Stock | action  (numbers hide on mobile and move under the name)
-const DELIVER_GRID = 'sm:grid-cols-[minmax(0,1fr)_3.5rem_3.5rem_3.5rem_9.5rem]';
+const DELIVER_GRID = 'sm:grid-cols-[minmax(0,1fr)_6rem_6rem_6rem_12rem]';
 const RETURN_GRID = 'sm:grid-cols-[minmax(0,1fr)_4rem_9.5rem]';
 
 /* ----------------------------- small parts ----------------------------- */
 
-function QtyStepper({ value, max, onChange, label, disabled = false }) {
+function QtyStepper({ value, max, onChange, label, disabled = false, large = false }) {
     const n = Number(value) || 0;
     const set = (v) => onChange(clamp(v, 0, max));
+    const btn = large ? stepBtnLg : stepBtn;
 
     return (
-        <div className="inline-flex items-center overflow-hidden rounded-md border border-[#bccad6] bg-white">
-            <button type="button" className={stepBtn} onClick={() => set(n - 1)} disabled={disabled || n <= 0} aria-label={`Decrease ${label}`}>
+        <div className="inline-flex items-center overflow-hidden rounded-lg border border-[#c9d6e5] bg-white">
+            <button type="button" className={btn} onClick={() => set(n - 1)} disabled={disabled || n <= 0} aria-label={`Decrease ${label}`}>
                 <Minus className="size-3.5" />
             </button>
             <input
@@ -105,9 +113,11 @@ function QtyStepper({ value, max, onChange, label, disabled = false }) {
                 onChange={(e) => onChange(e.target.value === '' ? '' : clamp(parseInt(e.target.value, 10) || 0, 0, max))}
                 onFocus={(e) => e.target.select()}
                 aria-label={label}
-                className="h-7 w-11 border-x border-[#bccad6] text-center text-sm font-semibold tabular-nums text-[#3a4157] focus:outline-none focus:ring-2 focus:ring-inset focus:ring-[#8d9db6]/40 disabled:bg-muted [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                className={`${
+                    large ? 'h-11 w-16 text-lg' : 'h-7 w-11 text-sm'
+                } border-x border-[#c9d6e5] text-center font-semibold tabular-nums text-[#12306b] focus:outline-none focus:ring-2 focus:ring-inset focus:ring-[#1b4a7d]/20 disabled:bg-muted [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none`}
             />
-            <button type="button" className={stepBtn} onClick={() => set(n + 1)} disabled={disabled || n >= max} aria-label={`Increase ${label}`}>
+            <button type="button" className={btn} onClick={() => set(n + 1)} disabled={disabled || n >= max} aria-label={`Increase ${label}`}>
                 <Plus className="size-3.5" />
             </button>
         </div>
@@ -134,8 +144,8 @@ function Segmented({ value, onChange, options, label }) {
                         aria-checked={active}
                         title={o.hint}
                         onClick={() => onChange(o.value)}
-                        className={`flex items-center justify-center gap-1 whitespace-nowrap rounded px-2 py-1 text-xs font-medium transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#667292]/40 ${
-                            active ? 'bg-white text-[#3a4157] shadow-sm' : 'text-[#667292] hover:text-[#3a4157]'
+                        className={`flex items-center justify-center gap-1 whitespace-nowrap rounded px-2 py-1 text-xs font-medium transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#6b84a8]/40 ${
+                            active ? 'bg-white text-[#12306b] shadow-sm' : 'text-[#6b84a8] hover:text-[#12306b]'
                         }`}
                     >
                         <Icon className="size-3 shrink-0" />
@@ -147,10 +157,10 @@ function Segmented({ value, onChange, options, label }) {
     );
 }
 
-function Progress({ value, max, tone = 'bg-[#667292]', className = '' }) {
+function Progress({ value, max, tone = 'bg-[#6b84a8]', className = '' }) {
     const pct = max > 0 ? clamp(Math.round((value / max) * 100), 0, 100) : 0;
     return (
-        <div className={`h-1.5 overflow-hidden rounded-full bg-[#eef1f5] ${className}`} role="progressbar" aria-valuenow={value} aria-valuemin={0} aria-valuemax={max}>
+        <div className={`h-2 overflow-hidden rounded-full bg-[#e3eaf3] ${className}`} role="progressbar" aria-valuenow={value} aria-valuemin={0} aria-valuemax={max}>
             <div className={`h-full rounded-full transition-all duration-300 ${tone}`} style={{ width: `${pct}%` }} />
         </div>
     );
@@ -161,7 +171,7 @@ function Pill({ tone = 'mute', Icon, children }) {
         green: 'bg-emerald-50 text-emerald-700',
         amber: 'bg-amber-50 text-amber-700',
         sky: 'bg-sky-50 text-sky-700',
-        mute: 'bg-white text-[#667292]',
+        mute: 'bg-white text-[#6b84a8]',
     };
     return (
         <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${tones[tone]}`}>
@@ -175,7 +185,7 @@ function Banner({ tone = 'error', children }) {
     const tones = {
         error: 'border-red-300 bg-red-50 text-red-800',
         warning: 'border-amber-300 bg-amber-50 text-amber-800',
-        info: 'border-[#bccad6] bg-[#eef1f5] text-[#3a4157]',
+        info: 'border-[#dbe4ef] bg-[#eef3fa] text-[#12306b]',
     };
     return (
         <div role={tone === 'error' ? 'alert' : undefined} className={`rounded-lg border px-3 py-1.5 text-sm ${tones[tone]}`}>
@@ -184,9 +194,13 @@ function Banner({ tone = 'error', children }) {
     );
 }
 
-function TableHead({ className, children }) {
+function TableHead({ className, children, roomy = false }) {
     return (
-        <div className={`hidden gap-3 border-b border-[#bccad6] bg-[#f3f5f9] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-[#667292] sm:grid ${className}`}>
+        <div
+            className={`hidden gap-3 border-b border-[#dbe4ef] bg-[#f4f7fb] text-xs font-semibold uppercase tracking-wider text-[#4a5d7a] sm:grid ${
+                roomy ? 'px-6 py-3' : 'px-3 py-1.5'
+            } ${className}`}
+        >
             {children}
         </div>
     );
@@ -439,26 +453,26 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
             {transaction && (
                 <form onSubmit={submit} className="flex max-h-[94vh] flex-col">
                     {/* ------------------------------ Header ------------------------------ */}
-                    <div className="flex items-center gap-3 border-b px-4 py-2.5">
-                        <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-[#eef1f5] text-[#667292]">
-                            <HeaderIcon className="size-4" />
-                        </span>
-                        <div className="min-w-0 flex-1">
-                            <h2 className="text-sm font-semibold leading-tight">{title}</h2>
-                            <p className="truncate text-xs text-muted-foreground">{transaction.name}</p>
-                        </div>
-                        {!isHistory && (
-                            <div className="flex w-40 shrink-0 flex-col items-end gap-1">
-                                <p className="text-xs text-muted-foreground">
-                                    <b className="text-sm tabular-nums text-[#3a4157]">{delivered}</b>/{ordered} delivered
-                                </p>
-                                <Progress value={delivered} max={ordered} tone="bg-emerald-500" className="w-full" />
+                    <div className="border-b border-[#dbe4ef] px-8 py-5">
+                        <div className="flex items-center gap-5">
+                            <HeaderIcon className="size-12 shrink-0 text-[#1b4a7d]" strokeWidth={1.5} />
+                            <div className="min-w-0 flex-1">
+                                <h2 className="text-3xl font-bold leading-tight text-[#12306b]">{title}</h2>
+                                <p className="truncate text-lg text-[#6b84a8]">{transaction.name}</p>
                             </div>
-                        )}
+                            {!isHistory && (
+                                <div className="flex w-64 shrink-0 flex-col items-end gap-2">
+                                    <p className="text-base text-[#4a5d7a]">
+                                        <b className="tabular-nums text-[#12306b]">{delivered}</b>/{ordered} delivered
+                                    </p>
+                                    <Progress value={delivered} max={ordered} tone="bg-emerald-500" className="w-full" />
+                                </div>
+                            )}
+                        </div>
                     </div>
 
                     {/* ------------------------------- Body ------------------------------- */}
-                    <div className="flex-1 space-y-3 overflow-y-auto px-4 py-3">
+                    <div className="flex-1 space-y-6 overflow-y-auto px-8 py-6">
                         {errors.items && <Banner tone="error">{errors.items}</Banner>}
 
                         {/* ============================ HISTORY ============================ */}
@@ -468,8 +482,8 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
                             ) : (
                                 <ul className="space-y-2">
                                     {transaction.deliveries.map((d) => (
-                                        <li key={d.id} className="overflow-hidden rounded-lg border border-[#bccad6]">
-                                            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 bg-[#f3f5f9] px-3 py-1.5">
+                                        <li key={d.id} className="overflow-hidden rounded-lg border border-[#dbe4ef]">
+                                            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 bg-[#f4f7fb] px-3 py-1.5">
                                                 <div className="flex flex-wrap items-center gap-2">
                                                     <span
                                                         className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
@@ -481,8 +495,8 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
                                                     </span>
 
                                                     {d.dr_number && (
-                                                        <span className="inline-flex items-center gap-1 text-xs text-[#3a4157]">
-                                                            <FileText className="size-3 text-[#667292]" />
+                                                        <span className="inline-flex items-center gap-1 text-xs text-[#12306b]">
+                                                            <FileText className="size-3 text-[#6b84a8]" />
                                                             DR <b>{d.dr_number}</b>
                                                         </span>
                                                     )}
@@ -492,7 +506,7 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
                                                             href={d.dr_file_url}
                                                             target="_blank"
                                                             rel="noreferrer"
-                                                            className="inline-flex max-w-[14rem] items-center gap-1 text-xs font-medium text-[#667292] hover:underline"
+                                                            className="inline-flex max-w-[14rem] items-center gap-1 text-xs font-medium text-[#6b84a8] hover:underline"
                                                         >
                                                             <Paperclip className="size-3 shrink-0" />
                                                             <span className="truncate">{d.dr_file_name ?? 'View DR'}</span>
@@ -547,7 +561,7 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
                         {!isHistory && nothingToDo && (
                             <div className="flex flex-col items-center gap-1.5 py-10 text-center">
                                 <CheckCircle2 className="size-8 text-emerald-500" />
-                                <p className="text-sm font-medium text-[#3a4157]">
+                                <p className="text-sm font-medium text-[#12306b]">
                                     {isReturn ? 'Nothing to return' : 'Everything is delivered'}
                                 </p>
                                 <p className="text-sm text-muted-foreground">
@@ -564,7 +578,7 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
                                 {/* Quick actions */}
                                 {!reviewing && (
                                     <div className="flex flex-wrap items-center justify-between gap-2">
-                                        <h3 className="text-xs font-semibold uppercase tracking-wide text-[#667292]">
+                                        <h3 className="text-sm font-bold uppercase tracking-[0.15em] text-[#12306b]">
                                             {isReturn ? 'Items to return' : 'Items to deliver'}
                                         </h3>
                                         <div className="flex flex-wrap gap-1.5">
@@ -591,16 +605,16 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
 
                                 {/* ---------- DELIVER table ---------- */}
                                 {!isReturn && (
-                                    <div className="overflow-hidden rounded-lg border border-[#bccad6]">
-                                        <TableHead className={DELIVER_GRID}>
+                                    <div className="overflow-hidden rounded-xl border border-[#dbe4ef] bg-white">
+                                        <TableHead roomy className={DELIVER_GRID}>
                                             <span>Item</span>
                                             <span className="text-center">Ordered</span>
                                             <span className="text-center">Done</span>
                                             <span className="text-center">Stock</span>
-                                            <span className="text-right">Deliver now</span>
+                                            <span className="text-center">Deliver now</span>
                                         </TableHead>
 
-                                        <ul className="divide-y divide-slate-100">
+                                        <ul className="divide-y divide-[#e6edf5]">
                                             {lines.map((line, index) => {
                                                 const row = data.items[index];
                                                 const remaining = remainingOf(line);
@@ -608,11 +622,11 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
                                                 const stock = stockOf[line.item_variant_id];
 
                                                 return (
-                                                    <li key={line.id} className={`px-3 py-1.5 ${short ? 'bg-red-50/60' : ''}`}>
+                                                    <li key={line.id} className={`px-6 py-4 ${short ? 'bg-red-50/60' : ''}`}>
                                                         <div className={`grid grid-cols-1 items-center gap-x-3 gap-y-1 ${DELIVER_GRID}`}>
                                                             <div className="min-w-0">
-                                                                <p className="truncate text-sm font-semibold">{line.item_name}</p>
-                                                                <p className="truncate text-xs text-muted-foreground">
+                                                                <p className="truncate text-base font-bold text-[#12306b]">{line.item_name}</p>
+                                                                <p className="truncate text-sm text-[#4a5d7a]">
                                                                     {line.brand_name}
                                                                     <span className="sm:hidden">
                                                                         {' '}· ordered {line.quantity} · done {deliveredOf(line)}
@@ -621,39 +635,31 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
                                                                 </p>
                                                             </div>
 
-                                                            <span className="hidden text-center text-sm tabular-nums sm:block">{line.quantity}</span>
-                                                            <span className="hidden text-center text-sm tabular-nums text-emerald-700 sm:block">
+                                                            <span className="hidden text-center text-base tabular-nums text-[#12306b] sm:block">{line.quantity}</span>
+                                                            <span className="hidden text-center text-base font-medium tabular-nums text-[#0b7ab0] sm:block">
                                                                 {deliveredOf(line)}
                                                             </span>
                                                             <span
-                                                                className={`hidden text-center text-sm tabular-nums sm:block ${
-                                                                    short ? 'font-semibold text-red-700' : 'text-slate-600'
+                                                                className={`hidden text-center text-base tabular-nums sm:block ${
+                                                                    short ? 'font-semibold text-red-700' : 'text-[#12306b]'
                                                                 }`}
                                                             >
                                                                 {stock ?? '—'}
                                                             </span>
 
-                                                            <div className="flex items-center justify-end gap-2">
+                                                            <div className="flex items-center justify-center">
                                                                 {remaining === 0 ? (
-                                                                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                                                                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-700">
                                                                         <CheckCircle2 className="size-3.5" /> Delivered
                                                                     </span>
                                                                 ) : (
-                                                                    <>
-                                                                        <button
-                                                                            type="button"
-                                                                            onClick={() => setQty(index, remaining)}
-                                                                            className="text-xs font-medium text-[#667292] hover:underline"
-                                                                        >
-                                                                            All
-                                                                        </button>
-                                                                        <QtyStepper
-                                                                            value={row?.quantity ?? ''}
-                                                                            max={remaining}
-                                                                            onChange={(v) => setQty(index, v)}
-                                                                            label={`Quantity to deliver for ${line.item_name}`}
-                                                                        />
-                                                                    </>
+                                                                    <QtyStepper
+                                                                        large
+                                                                        value={row?.quantity ?? ''}
+                                                                        max={remaining}
+                                                                        onChange={(v) => setQty(index, v)}
+                                                                        label={`Quantity to deliver for ${line.item_name}`}
+                                                                    />
                                                                 )}
                                                             </div>
                                                         </div>
@@ -672,7 +678,7 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
 
                                 {/* ---------- RETURN table (edit) ---------- */}
                                 {isReturn && !reviewing && (
-                                    <div className="overflow-hidden rounded-lg border border-[#bccad6]">
+                                    <div className="overflow-hidden rounded-lg border border-[#dbe4ef]">
                                         <TableHead className={RETURN_GRID}>
                                             <span>Item</span>
                                             <span className="text-center">Out</span>
@@ -704,7 +710,7 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
                                                                 <button
                                                                     type="button"
                                                                     onClick={() => setQty(index, deliveredOf(line))}
-                                                                    className="text-xs font-medium text-[#667292] hover:underline"
+                                                                    className="text-xs font-medium text-[#6b84a8] hover:underline"
                                                                 >
                                                                     All
                                                                 </button>
@@ -718,10 +724,10 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
                                                         </div>
 
                                                         {qty > 0 && (
-                                                            <div className="space-y-1.5 border-t border-[#bccad6]/50 bg-[#f7f9fb] px-3 py-2">
+                                                            <div className="space-y-1.5 border-t border-[#dbe4ef]/50 bg-[#f7f9fb] px-3 py-2">
                                                                 <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
                                                                     <div className="flex items-center gap-2">
-                                                                        <span className="text-xs text-[#667292]">Condition</span>
+                                                                        <span className="text-xs text-[#6b84a8]">Condition</span>
                                                                         <Segmented
                                                                             label="Condition of returned units"
                                                                             value={row.condition}
@@ -732,7 +738,7 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
 
                                                                     {row.condition === 'partial' && (
                                                                         <div className="flex items-center gap-2">
-                                                                            <span className="text-xs text-[#667292]">Damaged</span>
+                                                                            <span className="text-xs text-[#6b84a8]">Damaged</span>
                                                                             <QtyStepper
                                                                                 value={row.written_off}
                                                                                 max={qty}
@@ -747,7 +753,7 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
                                                                             value={row.reason}
                                                                             onChange={(e) => patchRow(index, { reason: e.target.value })}
                                                                             aria-label={`Why ${line.item_name} can't be restocked`}
-                                                                            className={`${field} w-44 ${!row.reason ? 'border-amber-400' : ''}`}
+                                                                            className={`${fieldSm} w-44 ${!row.reason ? 'border-amber-400' : ''}`}
                                                                         >
                                                                             <option value="" disabled>Why not resold?</option>
                                                                             {RETURN_REASONS.map((r) => (
@@ -757,7 +763,7 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
                                                                     )}
 
                                                                     <div className="flex items-center gap-2">
-                                                                        <span className="text-xs text-[#667292]">Customer gets</span>
+                                                                        <span className="text-xs text-[#6b84a8]">Customer gets</span>
                                                                         <Segmented
                                                                             label="Replacement"
                                                                             value={row.replace !== false}
@@ -790,7 +796,7 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
                                         <p className="text-sm text-muted-foreground">
                                             Check this before saving. Stock changes are written to the ledger and can't be edited afterwards.
                                         </p>
-                                        <ul className="divide-y divide-slate-100 rounded-lg border border-[#bccad6]">
+                                        <ul className="divide-y divide-slate-100 rounded-lg border border-[#dbe4ef]">
                                             {lines.map((line, index) => {
                                                 const row = data.items[index];
                                                 const qty = Number(row?.quantity) || 0;
@@ -819,18 +825,14 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
                                     </>
                                 )}
 
-                                {/* ---------- Details strip: DR + note ---------- */}
+                                {/* ---------- Details: DR number, DR softcopy, note ---------- */}
                                 {!reviewing && (
-                                    <div
-                                        className={`grid gap-3 rounded-lg border border-[#bccad6] p-3 ${
-                                            isReturn ? '' : 'md:grid-cols-[11rem_minmax(0,1fr)_minmax(0,1fr)]'
-                                        }`}
-                                    >
+                                    <div className={`grid gap-4 ${isReturn ? '' : 'md:grid-cols-[1fr_1.3fr_1.3fr]'}`}>
                                         {!isReturn && (
                                             <>
-                                                <div>
-                                                    <label htmlFor="dr_number" className="flex items-center gap-1 text-xs font-medium text-[#667292]">
-                                                        <FileText className="size-3.5" /> DR number
+                                                <div className="rounded-xl border border-[#dbe4ef] bg-white p-4">
+                                                    <label htmlFor="dr_number" className="block text-sm text-[#12306b]">
+                                                        DR number
                                                     </label>
                                                     <input
                                                         id="dr_number"
@@ -839,15 +841,14 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
                                                         placeholder="e.g. DR-000123"
                                                         value={data.dr_number}
                                                         onChange={(e) => setData('dr_number', e.target.value)}
-                                                        className={`mt-1 ${field}`}
+                                                        className={`mt-2 ${field}`}
                                                     />
                                                     {errors.dr_number && <p className="mt-1 text-xs text-red-600">{errors.dr_number}</p>}
                                                 </div>
 
-                                                <div className="min-w-0">
-                                                    <label htmlFor="dr_file" className="flex items-center gap-1 text-xs font-medium text-[#667292]">
-                                                        <Paperclip className="size-3.5" /> DR softcopy
-                                                        <span className="font-normal text-muted-foreground">(PDF/image, max 10 MB)</span>
+                                                <div className="min-w-0 rounded-xl border border-[#dbe4ef] bg-white p-4">
+                                                    <label htmlFor="dr_file" className="block text-sm text-[#12306b]">
+                                                        DR softcopy <span className="text-[#6b84a8]">(PDF/image, max 10 MB)</span>
                                                     </label>
                                                     <input
                                                         ref={fileRef}
@@ -855,13 +856,13 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
                                                         type="file"
                                                         accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/*"
                                                         onChange={pickFile}
-                                                        className="mt-1 block w-full text-xs text-[#3a4157] file:mr-2 file:rounded-md file:border-0 file:bg-[#eef1f5] file:px-2.5 file:py-1.5 file:text-xs file:font-medium file:text-[#667292] hover:file:bg-[#e2e7ee]"
+                                                        className="mt-2 block w-full text-sm text-[#12306b] file:mr-3 file:rounded-lg file:border file:border-[#c9d6e5] file:bg-[#eef3fa] file:px-4 file:py-3 file:text-sm file:font-semibold file:text-[#12306b] hover:file:bg-[#e3ecf7]"
                                                     />
                                                     {data.dr_file && (
                                                         <button
                                                             type="button"
                                                             onClick={removeFile}
-                                                            className="mt-1 inline-flex max-w-full items-center gap-1 text-xs font-medium text-red-600 hover:underline"
+                                                            className="mt-2 inline-flex max-w-full items-center gap-1 text-xs font-medium text-red-600 hover:underline"
                                                         >
                                                             <X className="size-3 shrink-0" />
                                                             <span className="truncate">Remove {data.dr_file.name}</span>
@@ -873,8 +874,10 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
                                             </>
                                         )}
 
-                                        <div className="min-w-0">
-                                            <label htmlFor="delivery_note" className="block text-xs font-medium text-[#667292]">Note</label>
+                                        <div className="min-w-0 rounded-xl border border-[#dbe4ef] bg-white p-4">
+                                            <label htmlFor="delivery_note" className="block text-sm text-[#12306b]">
+                                                Note
+                                            </label>
                                             <input
                                                 id="delivery_note"
                                                 type="text"
@@ -882,7 +885,7 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
                                                 placeholder={isReturn ? 'Optional, e.g. return slip number' : 'Optional, e.g. waybill'}
                                                 value={data.note}
                                                 onChange={(e) => setData('note', e.target.value)}
-                                                className={`mt-1 ${field}`}
+                                                className={`mt-2 ${field}`}
                                             />
                                         </div>
                                     </div>
@@ -897,55 +900,56 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
                         )}
                     </div>
 
-                    {/* --------------------------- Summary bar --------------------------- */}
-                    {showForm && (
-                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t bg-[#eef1f5] px-4 py-1.5 text-xs text-[#3a4157]">
-                            <span>
-                                After saving: <b>{after} of {orderedAfter}</b> delivered
-                            </span>
-
-                            {isReturn && now > 0 ? (
-                                <span className="flex flex-wrap items-center gap-1.5">
-                                    <Pill tone="green" Icon={PackageCheck}>{restocked} back in stock</Pill>
-                                    {writtenOff > 0 && <Pill tone="amber" Icon={PackageX}>{writtenOff} written off</Pill>}
-                                    {cancelled > 0 && (
-                                        <Pill tone="sky" Icon={Ban}>
-                                            −{cancelled} from order{reduction > 0 ? ` (${currency(reduction)})` : ''}
-                                        </Pill>
-                                    )}
-                                </span>
-                            ) : null}
-
-                            <span className="text-[#667292]">
-                                {!isReturn &&
-                                    (after >= ordered
-                                        ? 'Everything is delivered. You can move the card forward.'
-                                        : 'The rest stays open for the next delivery.')}
-                                {isReturn && willReopen && 'Units to replace become deliverable again.'}
-                                {isReturn && !willReopen && now > 0 && 'Nothing left to deliver.'}
-                                {isReturn && willReopen && movesBackTo && (
-                                    <> The card goes back to <b>{movesBackTo}</b>.</>
-                                )}
-                            </span>
-                        </div>
-                    )}
-
                     {/* ------------------------------ Footer ------------------------------ */}
-                    <div className="flex items-center justify-between gap-3 border-t bg-muted/30 px-4 py-2">
-                        <p className="min-w-0 text-xs text-amber-700" aria-live="polite">{hint}</p>
-                        <div className="flex shrink-0 gap-2">
+                    <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-t border-[#dbe4ef] bg-[#fbfcfe] px-8 py-4">
+                        <div className="min-w-0 space-y-1 text-sm text-[#12306b]">
+                            {showForm && (
+                                <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                                    <span>
+                                        After saving: <b>{after} of {orderedAfter}</b> delivered
+                                    </span>
+
+                                    {isReturn && now > 0 ? (
+                                        <span className="flex flex-wrap items-center gap-1.5">
+                                            <Pill tone="green" Icon={PackageCheck}>{restocked} back in stock</Pill>
+                                            {writtenOff > 0 && <Pill tone="amber" Icon={PackageX}>{writtenOff} written off</Pill>}
+                                            {cancelled > 0 && (
+                                                <Pill tone="sky" Icon={Ban}>
+                                                    −{cancelled} from order{reduction > 0 ? ` (${currency(reduction)})` : ''}
+                                                </Pill>
+                                            )}
+                                        </span>
+                                    ) : null}
+
+                                    <span className={`text-[#6b84a8] ${!isReturn ? 'border-l border-[#c9d6e5] pl-4' : ''}`}>
+                                        {!isReturn &&
+                                            (after >= ordered
+                                                ? 'Everything is delivered. You can move the card forward.'
+                                                : 'The rest stays open for the next delivery.')}
+                                        {isReturn && willReopen && 'Units to replace become deliverable again.'}
+                                        {isReturn && !willReopen && now > 0 && 'Nothing left to deliver.'}
+                                        {isReturn && willReopen && movesBackTo && (
+                                            <> The card goes back to <b>{movesBackTo}</b>.</>
+                                        )}
+                                    </span>
+                                </div>
+                            )}
+                            <p className="text-xs text-amber-700" aria-live="polite">{hint}</p>
+                        </div>
+
+                        <div className="flex shrink-0 gap-3">
                             {reviewing ? (
-                                <Button type="button" variant="outline" onClick={() => setStep('edit')} disabled={processing}>
+                                <Button type="button" variant="outline" className="h-11 px-6 text-base" onClick={() => setStep('edit')} disabled={processing}>
                                     <ArrowLeft />
                                     Back
                                 </Button>
                             ) : (
-                                <Button type="button" variant="outline" onClick={close} disabled={processing}>
+                                <Button type="button" variant="outline" className="h-11 px-6 text-base" onClick={close} disabled={processing}>
                                     {isHistory || nothingToDo ? 'Close' : 'Cancel'}
                                 </Button>
                             )}
                             {showForm && (
-                                <Button type="submit" variant="brand" disabled={disabled}>
+                                <Button type="submit" variant="brand" className="h-11 bg-[#1b4a7d] px-6 text-base hover:bg-[#163e68]" disabled={disabled}>
                                     {primaryLabel}
                                 </Button>
                             )}
