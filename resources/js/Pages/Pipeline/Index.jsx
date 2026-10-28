@@ -8,6 +8,7 @@ import StockToast from '@/Components/Pipeline/StockToast';
 import DeliveryModal from '@/Components/Pipeline/DeliveryModal';
 import MoveConfirmModal from '@/Components/Pipeline/MoveConfirmModal';
 import CardDetailModal from '@/Components/Pipeline/CardDetailModal';
+import BoardToolbar from '@/Components/Pipeline/BoardToolbar';
 import ConfirmDelete from '@/Components/ConfirmationModal/ConfirmDelete';
 import { StageColumn, DealDropZone, OverlayCard, stageAccents, deliveryTotals, cardKey } from '@/Components/Pipeline/Board';
 import { Head, router, usePage } from '@inertiajs/react';
@@ -36,13 +37,15 @@ const KINDS = {
 const kindOf = (t) => KINDS[t?.kind] ?? KINDS.transaction;
 const isTransaction = (t) => !t?.kind;
 
-export default function Index({ pipelines }) {
+// `pipelines` defaults to [] so the page shows "No pipeline yet" instead of crashing
+// when the prop is missing (for example if another route renders this page without it).
+export default function Index({ pipelines = [] }) {
     const { flash } = usePage().props;
 
     const [isOpen, setIsOpen] = useState(false);
     const [editingPipeline, setEditingPipeline] = useState(null);
     const [deletingPipeline, setDeletingPipeline] = useState(null);
-    const [pipelineList, setPipelineList] = useState(pipelines);
+    const [pipelineList, setPipelineList] = useState(pipelines ?? []);
     const [pendingMove, setPendingMove] = useState(null);
     const [isMoving, setIsMoving] = useState(false);
 
@@ -63,8 +66,23 @@ export default function Index({ pipelines }) {
     const [activeItem, setActiveItem] = useState(null);
     const [activeStageId, setActiveStageId] = useState(null);
 
+    // Board search / filter (display only: moves still use the full, unfiltered data)
+    const [query, setQuery] = useState('');
+    const [priorityFilter, setPriorityFilter] = useState('');
+
+    const matchesFilter = (card) => {
+        if (priorityFilter && card.priority !== priorityFilter) return false;
+        const term = query.trim().toLowerCase();
+        if (!term) return true;
+        return [card.name, card.client?.client_name, card.contact_person?.contact_person, card.quotation_number]
+            .filter(Boolean)
+            .join(' ')
+            .toLowerCase()
+            .includes(term);
+    };
+
     useEffect(() => {
-        setPipelineList(pipelines);
+        setPipelineList(pipelines ?? []);
     }, [pipelines]);
 
     useEffect(() => {
@@ -83,6 +101,9 @@ export default function Index({ pipelines }) {
     const selectedPipeline = pipelineList[0];
 
     const stages = [...(selectedPipeline?.stages ?? [])].sort((a, b) => a.sort_order - b.sort_order);
+
+    const allCards = stages.flatMap((s) => s.transactions ?? []);
+    const shownCards = allCards.filter(matchesFilter);
 
     // The card (and its stage) shown in the detail modal.
     const viewing = viewingKey
@@ -245,7 +266,7 @@ export default function Index({ pipelines }) {
                     preserveState: true,
                     onSuccess: () => setResultEffect({ type: status, message }),
                     onError: (errors) => {
-                        setPipelineList(pipelines);
+                        setPipelineList(pipelines ?? []);
                         setNotice(Object.values(errors)[0]);
                     },
                     onFinish: () => {
@@ -306,7 +327,7 @@ export default function Index({ pipelines }) {
                     }
                 },
                 onError: (errors) => {
-                    setPipelineList(pipelines);
+                    setPipelineList(pipelines ?? []);
                     setNotice(Object.values(errors)[0]);
                 },
                 onFinish: () => {
@@ -363,14 +384,23 @@ export default function Index({ pipelines }) {
                         No pipeline yet. Create it to get started.
                     </p>
                 ) : (
-                    <div className="flex h-[calc(100dvh-13rem)] min-h-[500px] w-full min-w-0 flex-col gap-3 sm:h-[calc(100dvh-9rem)]">
+                    <div className="flex h-[calc(100dvh-13rem)] min-h-[560px] w-full min-w-0 flex-col gap-4 sm:h-[calc(100dvh-9rem)]">
+                        <BoardToolbar
+                            query={query}
+                            onQuery={setQuery}
+                            priority={priorityFilter}
+                            onPriority={setPriorityFilter}
+                            shown={shownCards.length}
+                            total={allCards.length}
+                        />
+
                         <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-                            <div className="flex min-h-0 w-full min-w-0 flex-1 snap-x snap-mandatory gap-3 overflow-x-auto sm:snap-none sm:gap-4">
+                            <div className="flex min-h-[360px] w-full min-w-0 flex-1 snap-x snap-mandatory gap-3 overflow-x-auto pb-1 sm:snap-none sm:gap-4">
                                 {stages.map((stage, index) => (
                                     <StageColumn
                                         key={stage.id}
                                         stage={stage}
-                                        items={stage.transactions ?? []}
+                                        items={(stage.transactions ?? []).filter(matchesFilter)}
                                         accent={stageAccents[index % stageAccents.length]}
                                         disabled={!isAllowedStage(index)}
                                         showDelivery={deliveryIndex >= 0 && index >= deliveryIndex}

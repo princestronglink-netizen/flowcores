@@ -3,15 +3,17 @@
 namespace App\Models;
 
 use App\Exceptions\InsufficientStockException;
+use App\Models\Concerns\HasQuotation;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
 class Transaction extends Model
 {
+    use HasQuotation;
+
     protected $table = 'transactions';
 
     protected $fillable = [
@@ -24,18 +26,25 @@ class Transaction extends Model
         'priority',
         'winning_message',
         'amount',
+        'markup_percent',
+        'vat_percent',
         'note',
         'stock_deducted_at', // set on the first delivery; null when nothing has been delivered
     ];
 
     protected $casts = [
         'stock_deducted_at' => 'datetime',
+        'markup_percent'    => 'float',
+        'vat_percent'       => 'float',
     ];
 
-    protected $appends = ['total'];
+    // `total` is the grand total (subtotal + markup + VAT). The rest feed the breakdown in the UI.
+    protected $appends = ['total', 'subtotal', 'markup_amount', 'vat_amount'];
 
     protected $attributes = [
-        'status' => 'open',
+        'status'         => 'open',
+        'markup_percent' => 0,
+        'vat_percent'    => 12,
     ];
 
     /* ------------------------------ Relations ------------------------------ */
@@ -75,12 +84,6 @@ class Transaction extends Model
         return $this->hasMany(Delivery::class);
     }
 
-    /** The quotation this transaction was created from (if any). */
-    public function quotation(): HasOne
-    {
-        return $this->hasOne(Quotation::class, 'transaction_id');
-    }
-
     /* ------------------------------- Stages -------------------------------- */
 
     public function moveToStage(PipelineStage $stage, ?int $changedBy = null, ?string $note = null): array
@@ -95,6 +98,9 @@ class Transaction extends Model
             $this->update(['pipeline_stage_id' => $stage->id]);
             $this->unsetRelation('stage');
 
+            // Freeze the quotation once the card is past the quotation stage, thaw it when it is back.
+            $this->syncQuotationFreeze($stage);
+
             $this->stageHistory()->create([
                 'pipeline_stage_id' => $stage->id,
                 'changed_by'        => $changedBy,
@@ -107,17 +113,17 @@ class Transaction extends Model
         return $messages;
     }
 
-    /** Auto-create the quotation / client purchase order when this stage is flagged for it. */
+    /** Issue the quotation number / auto-create the client purchase order when this stage is flagged for it. */
     public function runStageAutomation(PipelineStage $stage, ?int $by = null): array
     {
         $messages = [];
 
-        if ($stage->creates_quotation && ($q = Quotation::generateFor($this, $by))) {
+        if ($stage->creates_quotation && ($number = $this->issueQuotation($by))) {
             $this->stageHistory()->create([
                 'pipeline_stage_id' => $stage->id, 'changed_by' => $by,
-                'note' => "Quotation {$q->quotation_number} generated",
+                'note' => "Quotation {$number} issued",
             ]);
-            $messages[] = "Quotation {$q->quotation_number} was generated.";
+            $messages[] = "Quotation {$number} was issued. You can print it from the card.";
         }
 
         if ($stage->creates_client_po && ($cpo = ClientPurchaseOrder::generateFor($this, $by))) {
@@ -511,12 +517,9 @@ class Transaction extends Model
                 }
             }
 
-            // Keep the stored amount in sync with the reduced order.
+            // Keep the stored amount in sync with the reduced order (markup and VAT included).
             if ($cancelledAny) {
-                $this->unsetRelation('items');
-                $this->update([
-                    'amount' => $this->items()->get()->sum(fn ($i) => $i->quantity * $i->unit_price),
-                ]);
+                $this->syncAmount();
             }
 
             return $delivery;
@@ -594,9 +597,60 @@ class Transaction extends Model
         });
     }
 
+    /* ------------------------------- Pricing ------------------------------- */
+
+    /** One place that knows how the money adds up: subtotal → markup → VAT → grand total. */
+    public static function breakdown(float $subtotal, float $markupPercent, float $vatPercent): array
+    {
+        $markup = round($subtotal * $markupPercent / 100, 2);
+        $net    = round($subtotal + $markup, 2);
+        $vat    = round($net * $vatPercent / 100, 2);
+
+        return [
+            'subtotal'      => round($subtotal, 2),
+            'markup_amount' => $markup,
+            'net'           => $net,
+            'vat_amount'    => $vat,
+            'total'         => round($net + $vat, 2),
+        ];
+    }
+
+    public function currentBreakdown(): array
+    {
+        $subtotal = $this->items->sum(fn ($item) => $item->quantity * $item->unit_price);
+
+        return static::breakdown((float) $subtotal, (float) $this->markup_percent, (float) $this->vat_percent);
+    }
+
+    public function getSubtotalAttribute(): float
+    {
+        return $this->currentBreakdown()['subtotal'];
+    }
+
+    public function getMarkupAmountAttribute(): float
+    {
+        return $this->currentBreakdown()['markup_amount'];
+    }
+
+    public function getVatAmountAttribute(): float
+    {
+        return $this->currentBreakdown()['vat_amount'];
+    }
+
     public function getTotalAttribute(): float
     {
-        return $this->items->sum(fn ($item) => $item->quantity * $item->unit_price);
+        return $this->currentBreakdown()['total'];
+    }
+
+    /** Re-save the stored `amount` from the items + markup + VAT (call after any change to them). */
+    public function syncAmount(): void
+    {
+        $this->unsetRelation('items');
+        $total = $this->currentBreakdown()['total'];
+
+        if ((float) $this->amount !== $total) {
+            $this->update(['amount' => $total]);
+        }
     }
 
     /* ------------------------------- Helpers ------------------------------- */
@@ -668,8 +722,6 @@ class Transaction extends Model
 
         return trim(($line->item_name ?? 'an item') . ($line->brand_name ? " ({$line->brand_name})" : ''));
     }
-
-    public function quotations(): HasMany { return $this->hasMany(Quotation::class, 'transaction_id'); }
 
     public function clientPurchaseOrders(): HasMany
     {

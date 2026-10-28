@@ -1,48 +1,148 @@
 import { Head } from '@inertiajs/react';
 
-const num = (v) =>
-    Number(v ?? 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+// "-" for zero/empty so blank amounts look like the Excel sheet.
+const num = (v) => {
+    const n = Number(v ?? 0);
+    if (!n) return '-';
+    return n.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+
+const pct = (v) => String(Number(v ?? 0)); // 10 -> "10", 12.5 -> "12.5"
 
 const fmtDate = (v) =>
     v ? new Date(v).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : '';
 
-// Company details printed in the header. Fill these in.
 const COMPANY = {
-    telefax: '',
-    mobile: '',
-    email: '',
-    tin: '',
+    line1: 'RL Bldg. Francisco Street',
+    line2: 'Brgy. Pulong Sta. Cruz, Sta. Rosa, Laguna',
+    email: 'purchasing@stronglinkservices.net',
+    telefax: '(049) 539-3215',
+    mobile: '09285058436',
+    // Fallbacks only: the real values come from the transaction (prepared_by / prepared_by_position).
+    preparedBy: '',
+    position: '',
 };
 
-const MIN_ROWS = 22; // keeps the items table the same height as your Excel sheet
+/*
+ * Column widths of the items table (%). The vertical lines are drawn from these numbers,
+ * and the totals box reuses them, so everything lines up. They must add up to 100.
+ *   NO. | DESCRIPTION | QTY | UOM | UNIT PRICE | AMOUNT
+ */
+const COLS = [8, 43, 9, 9, 15, 16];
+const EDGES = COLS.slice(0, -1).map((_, i) => COLS.slice(0, i + 1).reduce((a, b) => a + b, 0)); // 8, 51, 60, 69, 84
+const LABEL_W = COLS[4]; // UNIT PRICE column = totals label
+const AMOUNT_W = COLS[5]; // AMOUNT column = totals amount
+const TOTALS_W = LABEL_W + AMOUNT_W; // 31
+
+// One thin line per column edge, drawn down the whole items area (also through the empty space).
+const columnLines = EDGES.map((e) => `linear-gradient(#000, #000) calc(${e}% - 1px) 0 / 1px 100% no-repeat`).join(',\n        ');
 
 const css = `
-@page { size: A4 portrait; margin: 10mm; }
-.qt { font-family: Tahoma, Verdana, Arial, sans-serif; font-size: 10.5px; color: #000; width: 190mm; margin: 0 auto; background: #fff; }
+/* Full A4 sheet with a small margin. The page grows to fill it, so nothing is left blank at the bottom. */
+@page { size: A4 portrait; margin: 8mm; }
+
+.qt {
+    font-family: 'Segoe UI', Tahoma, Verdana, Arial, sans-serif;
+    font-size: 10.5px;
+    line-height: 1.35;
+    color: #000;
+    width: 194mm;
+    min-height: 279mm;
+    margin: 0 auto;
+    background: #fff;
+    display: flex;
+    flex-direction: column;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+}
+.qt * { box-sizing: border-box; }
 .qt table { border-collapse: collapse; width: 100%; }
-.qt .box { border: 1.5px solid #000; margin-top: 8px; }
-.qt .title { text-align: center; font-size: 18px; font-weight: bold; letter-spacing: 1px; padding: 2px 0; border-bottom: 1.5px solid #000; }
-.qt .head td { padding: 3px 6px; }
-.qt .intro { padding: 3px 6px; font-style: italic; border-top: 1.5px solid #000; }
-.qt .items { border-top: 1.5px solid #000; }
-.qt .items th { border-right: 1px solid #000; border-bottom: 1.5px solid #000; padding: 3px 4px; text-align: center; vertical-align: top; }
-.qt .items td { border-right: 1px solid #000; padding: 2px 5px; height: 17px; vertical-align: top; }
-.qt .items th:last-child, .qt .items td:last-child { border-right: 0; }
-.qt .items small { display: block; font-size: 9px; margin-top: 4px; font-weight: normal; }
-.qt .c { text-align: center; }
-.qt .r { text-align: right; font-variant-numeric: tabular-nums; }
-.qt .remarks { border-top: 1.5px solid #000; }
-.qt .remarks td { vertical-align: top; padding: 3px 6px; }
-.qt .sign { border: 1.5px solid #000; margin-top: 12px; height: 26mm; position: relative; }
-.qt .sign td { vertical-align: top; padding: 3px 6px; }
-@media print { .no-print { display: none !important; } .qt { width: 100%; } }
+
+/* ---------- Letterhead ---------- */
+.qt .letterhead { display: grid; grid-template-columns: 1fr auto 1fr; gap: 4mm; align-items: center; padding-bottom: 2.5mm; }
+.qt .letterhead .logo { display: block; height: 18mm; }
+.qt .addr { font-size: 9.5px; line-height: 1.45; align-self: end; }
+.qt .tel { font-size: 9.5px; line-height: 1.45; justify-self: end; align-self: start; }
+
+/* ---------- Main box (grows to fill the page) ---------- */
+.qt .box { flex: 1; display: flex; flex-direction: column; border: 1.5px solid #000; }
+
+.qt .titlebar { text-align: center; border-bottom: 1.5px solid #000; padding: .8mm 0; }
+.qt .titlebar h1 { margin: 0; font-size: 18px; font-weight: 700; letter-spacing: 1px; }
+
+.qt .info { display: grid; grid-template-columns: 1fr 70mm; }
+.qt .info > div { padding: 3mm 4mm; }
+.qt .kv { display: grid; gap: 1.2mm 2mm; margin: 0; grid-template-columns: 20mm 1fr; }
+.qt .meta .kv { grid-template-columns: 22mm 1fr; }
+.qt .kv dd { margin: 0; }
+.qt .kv dd.name { font-weight: 700; font-size: 12px; }
+
+.qt .greeting { padding: 1mm 4mm 2.5mm; }
+.qt .greeting p { margin: 0; }
+
+/* ---------- Items (this area stretches; the column lines run to the bottom) ---------- */
+.qt .itemsWrap {
+    flex: 1;
+    border-top: 1.5px solid #000;
+    background:
+        ${columnLines};
+}
+.qt .items { table-layout: fixed; }
+.qt .items th { font-weight: 700; padding: 1.8mm 2mm; text-align: center; border-bottom: 1.5px solid #000; }
+.qt .items td { padding: 0 2.5mm; height: 6.2mm; vertical-align: middle; }
+.qt .items .c { text-align: center; }
+.qt .items .r { text-align: right; font-variant-numeric: tabular-nums; }
+.qt .items .nf { text-align: center; font-weight: 700; letter-spacing: 1.5px; }
+
+/* ---------- Remarks + totals ---------- */
+.qt .bottom { display: grid; grid-template-columns: ${100 - TOTALS_W}% ${TOTALS_W}%; border-top: 1.5px solid #000; }
+.qt .remarks { padding: 2mm 4mm; border-right: 1px solid #000; }
+.qt .remarks .label { margin-bottom: 2.5mm; }
+.qt .remarks .body { text-align: center; font-style: italic; white-space: pre-line; }
+.qt .totals { table-layout: fixed; }
+.qt .totals td { padding: 1.5mm 2.5mm; border: 1px solid #000; }
+.qt .totals tr:first-child td { border-top: 0; }
+.qt .totals td:first-child { width: ${(LABEL_W / TOTALS_W) * 100}%; border-left: 0; }
+.qt .totals td:last-child { width: ${(AMOUNT_W / TOTALS_W) * 100}%; border-right: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.qt .totals .grand td { font-weight: 700; border-bottom: 0; }
+.qt .grand .amt { display: flex; justify-content: space-between; gap: 3mm; }
+
+/* ---------- Prepared by ---------- */
+.qt .sign { margin-top: 6mm; padding-left: 2mm; line-height: 1.5; }
+.qt .sign .space { height: 11mm; }
+
+@media print {
+    html, body { margin: 0 !important; padding: 0 !important; background: #fff !important; }
+    .no-print { display: none !important; }
+    .qt { width: 100%; }
+    .qt .items thead { display: table-header-group; }
+    .qt .items tr, .qt .bottom, .qt .sign, .qt .info { break-inside: avoid; page-break-inside: avoid; }
+}
 `;
 
 export default function Print({ quotation: q }) {
     const items = q.items ?? [];
-    const filler = Math.max(0, MIN_ROWS - items.length);
     const date = q.quotation_date ?? q.created_at;
-    const terms = q.terms?.trim() ? q.terms : 'Price is Valid for 30 Days.';
+
+    // Old versions stored remarks under "note".
+    const remarks = (q.remarks ?? q.note ?? '').trim();
+
+    // ---- Totals: subtotal -> markup -> VAT -> total amount ----
+    const lineAmount = (i) => i.subtotal ?? Number(i.quantity ?? 0) * Number(i.unit_price ?? 0);
+    const markupPct = Number(q.markup_percent ?? 0);
+    const vatPct = Number(q.vat_percent ?? 0);
+
+    const subtotal = round2(items.reduce((s, i) => s + Number(lineAmount(i) || 0), 0));
+    const markup = round2(subtotal * (markupPct / 100));
+    const net = round2(subtotal + markup);
+    const vat = round2(net * (vatPct / 100));
+    const total = round2(net + vat);
+
+    const contact = q.contact_person?.contact_person;
+    const site = q.site ?? q.client?.site;
+    const uom = (i) => i.uom ?? i.unit ?? i.variant?.unit_of_measure ?? '';
 
     return (
         <div className="bg-white p-4 print:p-0">
@@ -56,129 +156,137 @@ export default function Print({ quotation: q }) {
             </div>
 
             <div className="qt">
-                {/* Logo: put the file at public/images/stronglink-logo.png */}
-                <div style={{ textAlign: 'center', padding: '4px 0 8px' }}>
-                    <img src="/images/stronglink-logo.png" alt="Stronglink Services" style={{ height: '22mm', display: 'inline-block' }} />
-                </div>
-
-                <table>
-                    <tbody>
-                        <tr>
-                            <td style={{ padding: '1px 4px' }}>#27 Francisco Street</td>
-                            <td style={{ width: '38%', padding: '1px 4px' }}>Telefax no.: {COMPANY.telefax}</td>
-                        </tr>
-                        <tr>
-                            <td style={{ padding: '1px 4px' }}>Brgy. Pulong Sta. Cruz, Sta. Rosa, Laguna</td>
-                            <td style={{ padding: '1px 4px' }}>Mobile no.: {COMPANY.mobile}</td>
-                        </tr>
-                        <tr>
-                            <td style={{ padding: '1px 4px' }}>Email Add.: {COMPANY.email}</td>
-                            <td style={{ padding: '1px 4px' }}>VAT Reg. TIN: {COMPANY.tin}</td>
-                        </tr>
-                    </tbody>
-                </table>
+                {/* Logo file: public/images/stronglink-logo.png */}
+                <header className="letterhead">
+                    <div className="addr">
+                        <div>{COMPANY.line1}</div>
+                        <div>{COMPANY.line2}</div>
+                        <div>Email Add.: {COMPANY.email}</div>
+                    </div>
+                    <img className="logo" src="/images/stronglink-logo.png" alt="Stronglink Services" />
+                    <div className="tel">
+                        <div>Telefax no.: {COMPANY.telefax}</div>
+                        <div>Mobile no.: {COMPANY.mobile}</div>
+                    </div>
+                </header>
 
                 <div className="box">
-                    <div className="title">QUOTATION</div>
+                    <div className="titlebar">
+                        <h1>QUOTATION</h1>
+                    </div>
 
-                    <table className="head">
-                        <tbody>
-                            <tr>
-                                <td style={{ width: 90 }}>To:</td>
-                                <td>{q.client?.client_name}</td>
-                                <td style={{ width: 60 }}>Date:</td>
-                                <td style={{ width: '25%' }}>{fmtDate(date)}</td>
-                            </tr>
-                            <tr>
-                                <td>Address:</td>
-                                <td>{q.client?.address}</td>
-                                <td>Ctrl no.</td>
-                                <td>{q.quotation_number}</td>
-                            </tr>
-                            <tr><td colSpan={4} style={{ height: 8 }} /></tr>
-                            <tr>
-                                <td>Contact Person:</td>
-                                <td colSpan={3}>{q.contact_person?.contact_person}</td>
-                            </tr>
-                            <tr>
-                                <td>Contact Number:</td>
-                                <td colSpan={3}>{q.contact_person?.contact_number}</td>
-                            </tr>
-                        </tbody>
-                    </table>
+                    <section className="info">
+                        <div className="to">
+                            <dl className="kv">
+                                <dt>To:</dt>
+                                <dd className="name">{q.client?.client_name}</dd>
+                                <dt>Address:</dt>
+                                <dd>{q.client?.address || '—'}</dd>
+                                {site && (
+                                    <>
+                                        <dt>Site:</dt>
+                                        <dd>{site}</dd>
+                                    </>
+                                )}
+                                <dt>Attn.:</dt>
+                                <dd>{contact || '—'}</dd>
+                            </dl>
+                        </div>
+                        <div className="meta">
+                            <dl className="kv">
+                                <dt>Date:</dt>
+                                <dd>{fmtDate(date)}</dd>
+                                <dt>Ctrl No.:</dt>
+                                <dd>{q.quotation_number}</dd>
+                            </dl>
+                        </div>
+                    </section>
 
-                    <div className="intro">We are pleased to submit this quotation for your requirement.</div>
+                    <div className="greeting">
+                        {contact && <p>Dear {contact},</p>}
+                        <p>We are pleased to submit our best offer for your requirement.</p>
+                    </div>
 
-                    <table className="items">
-                        <colgroup>
-                            <col style={{ width: '8%' }} />
-                            <col />
-                            <col style={{ width: '8%' }} />
-                            <col style={{ width: '8%' }} />
-                            <col style={{ width: '15%' }} />
-                            <col style={{ width: '17%' }} />
-                        </colgroup>
-                        <thead>
-                            <tr>
-                                <th>Item no.</th>
-                                <th>ITEM DESCRIPTION</th>
-                                <th>QTY</th>
-                                <th>UOM</th>
-                                <th>UNIT PRICE<small>(VAT-EX)</small></th>
-                                <th>AMOUNT</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {items.map((i, idx) => (
-                                <tr key={i.id ?? idx}>
-                                    <td className="c">{idx + 1}</td>
+                    {/* Items: the wrapper stretches to the bottom, the column lines are its background */}
+                    <div className="itemsWrap">
+                        <table className="items">
+                            <colgroup>
+                                {COLS.map((w, i) => (
+                                    <col key={i} style={{ width: `${w}%` }} />
+                                ))}
+                            </colgroup>
+                            <thead>
+                                <tr>
+                                    <th>NO.</th>
+                                    <th>DESCRIPTION</th>
+                                    <th>QTY</th>
+                                    <th>UOM</th>
+                                    <th>UNIT PRICE</th>
+                                    <th>AMOUNT</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {items.map((i, idx) => (
+                                    <tr key={i.id ?? idx}>
+                                        <td className="c">{idx + 1}</td>
+                                        <td>
+                                            {i.item_name}
+                                            {i.brand_name ? ` | ${i.brand_name}` : ''}
+                                        </td>
+                                        <td className="c">{i.quantity}</td>
+                                        <td className="c">{uom(i)}</td>
+                                        <td className="r">{num(i.unit_price)}</td>
+                                        <td className="r">{num(lineAmount(i))}</td>
+                                    </tr>
+                                ))}
+                                <tr>
+                                    <td />
+                                    <td className="nf">NOTHING FOLLOWS</td>
+                                    <td /><td /><td /><td />
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <section className="bottom">
+                        <div className="remarks">
+                            <div className="label">Remarks:</div>
+                            <div className="body">{remarks}</div>
+                        </div>
+                        <table className="totals">
+                            <tbody>
+                                <tr>
+                                    <td>Subtotal</td>
+                                    <td>{num(subtotal)}</td>
+                                </tr>
+                                <tr>
+                                    <td>Mark Up{markupPct > 0 ? ` (${pct(markupPct)}%)` : ''}</td>
+                                    <td>{num(markup)}</td>
+                                </tr>
+                                <tr>
+                                    <td>VAT{vatPct > 0 ? ` (${pct(vatPct)}%)` : ''}</td>
+                                    <td>{num(vat)}</td>
+                                </tr>
+                                <tr className="grand">
+                                    <td>Total Amount</td>
                                     <td>
-                                        {i.item_name}
-                                        {i.brand_name ? ` — ${i.brand_name}` : ''}
+                                        <div className="amt">
+                                            <span>₱</span>
+                                            <span>{num(total)}</span>
+                                        </div>
                                     </td>
-                                    <td className="c">{i.quantity}</td>
-                                    <td className="c">{i.uom ?? i.unit ?? ''}</td>
-                                    <td className="r">{num(i.unit_price)}</td>
-                                    <td className="r">{num(i.subtotal ?? i.quantity * i.unit_price)}</td>
                                 </tr>
-                            ))}
-                            {Array.from({ length: filler }).map((_, k) => (
-                                <tr key={`f${k}`}>
-                                    <td /><td /><td /><td /><td /><td />
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-
-                    <table className="remarks">
-                        <tbody>
-                            <tr>
-                                <td>
-                                    <b>REMARKS:</b>
-                                    <div style={{ paddingLeft: 24, fontWeight: 'bold', whiteSpace: 'pre-line' }}>{terms}</div>
-                                </td>
-                                <td className="r" style={{ width: '17%', borderLeft: '1px solid #000', fontWeight: 'bold' }}>
-                                    <span style={{ display: 'block', fontSize: 9, fontWeight: 'normal', textAlign: 'left' }}>
-                                        TOTAL (VAT-EX)
-                                    </span>
-                                    {num(q.amount)}
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
+                            </tbody>
+                        </table>
+                    </section>
                 </div>
 
-                <div className="sign">
-                    <table>
-                        <tbody>
-                            <tr>
-                                <td style={{ width: '50%' }}>Prepared by:</td>
-                                <td>Approved by:</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                    <div style={{ position: 'absolute', left: 6, bottom: 3 }}>Purchasing Coordinator</div>
-                </div>
+                <section className="sign">
+                    <div>Prepared by:</div>
+                    <div className="space" />
+                    <div>{q.prepared_by || COMPANY.preparedBy}</div>
+                    <div>{q.prepared_by_position || COMPANY.position}</div>
+                </section>
             </div>
         </div>
     );

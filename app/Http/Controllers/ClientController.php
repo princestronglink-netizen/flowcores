@@ -2,24 +2,40 @@
 
 namespace App\Http\Controllers;
 
-use Illuminate\Http\Request;
 use App\Models\Client;
+use Illuminate\Http\Request;
 use Inertia\Inertia;
 
 class ClientController extends Controller
 {
-    public function index(Client $client)
+    public function index()
     {
         return Inertia::render('Client/Index', [
             'clients' => Client::with('contactPeople')->latest()->get(),
         ]);
     }
 
+    protected function contactRules(): array
+    {
+        return [
+            'contact_person' => 'required|string|max:255',
+            'contact_number' => 'nullable|string|max:255',
+            'email'          => 'nullable|email|max:255',
+        ];
+    }
+
+    protected function clientRules(?Client $client = null): array
+    {
+        return [
+            'client_code' => 'required|string|max:255|unique:clients,client_code' . ($client ? ',' . $client->id : ''),
+            'client_name' => 'required|string|max:255',
+            'address'     => 'nullable|string|max:500',
+        ];
+    }
+
     public function store(Request $request)
     {
-        $validated = $request->validate([
-            'client_code'               => 'required|string|max:255|unique:clients,client_code',
-            'client_name'               => 'required|string|max:255',
+        $validated = $request->validate($this->clientRules() + [
             'contacts'                  => 'required|array|min:1',
             'contacts.*.contact_person' => 'required|string|max:255',
             'contacts.*.contact_number' => 'nullable|string|max:255',
@@ -29,6 +45,7 @@ class ClientController extends Controller
         $client = Client::create([
             'client_code' => $validated['client_code'],
             'client_name' => $validated['client_name'],
+            'address'     => $validated['address'] ?? null,
         ]);
 
         foreach ($validated['contacts'] as $contact) {
@@ -40,9 +57,7 @@ class ClientController extends Controller
 
     public function update(Request $request, Client $client)
     {
-        $validated = $request->validate([
-            'client_code'               => 'required|string|max:255|unique:clients,client_code,' . $client->id,
-            'client_name'               => 'required|string|max:255',
+        $validated = $request->validate($this->clientRules($client) + [
             'contacts'                  => 'required|array|min:1',
             'contacts.*.contact_person' => 'required|string|max:255',
             'contacts.*.contact_number' => 'nullable|string|max:255',
@@ -52,9 +67,10 @@ class ClientController extends Controller
         $client->update([
             'client_code' => $validated['client_code'],
             'client_name' => $validated['client_name'],
+            'address'     => $validated['address'] ?? null,
         ]);
 
-        // simplest approach: wipe old contacts, recreate from the submitted list
+        // Wipe and recreate. Note: this changes contact IDs, see the warning below.
         $client->contactPeople()->delete();
         foreach ($validated['contacts'] as $contact) {
             $client->contactPeople()->create($contact);
@@ -72,17 +88,12 @@ class ClientController extends Controller
 
     public function quickStore(Request $request)
     {
-        $validated = $request->validate([
-            'client_code'    => 'required|string|max:255|unique:clients,client_code',
-            'client_name'    => 'required|string|max:255',
-            'contact_person' => 'required|string|max:255',
-            'contact_number' => 'nullable|string|max:255',
-            'email'          => 'nullable|email|max:255',
-        ]);
+        $validated = $request->validate($this->clientRules() + $this->contactRules());
 
         $client = Client::create([
             'client_code' => $validated['client_code'],
             'client_name' => $validated['client_name'],
+            'address'     => $validated['address'] ?? null,
         ]);
 
         $client->contactPeople()->create([
@@ -96,15 +107,8 @@ class ClientController extends Controller
 
     public function quickStoreContact(Request $request, Client $client)
     {
-        $validated = $request->validate([
-            'contact_person' => 'required|string|max:255',
-            'contact_number' => 'nullable|string|max:255',
-            'email'          => 'nullable|email|max:255',
-        ]);
+        $validated = $request->validate($this->contactRules());
 
-        $contact = $client->contactPeople()->create($validated);
-
-        return response()->json($contact);
+        return response()->json($client->contactPeople()->create($validated));
     }
-    
 }

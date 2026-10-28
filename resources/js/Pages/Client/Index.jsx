@@ -56,6 +56,7 @@ export default function Index({ clients }) {
                             <TableRow>
                                 <TableHead>Client Code</TableHead>
                                 <TableHead>Client Name</TableHead>
+                                <TableHead>Address</TableHead>
                                 <TableHead>Contact Person</TableHead>
                                 <TableHead>Contact Number</TableHead>
                                 <TableHead>Email</TableHead>
@@ -67,6 +68,9 @@ export default function Index({ clients }) {
                                 <TableRow key={client.id}>
                                     <TableCell>{client.client_code}</TableCell>
                                     <TableCell>{client.client_name}</TableCell>
+                                    <TableCell className="max-w-xs truncate" title={client.address ?? ''}>
+                                        {client.address || '—'}
+                                    </TableCell>
                                     <TableCell>{client.contact_people?.[0]?.contact_person ?? '—'}</TableCell>
                                     <TableCell>{client.contact_people?.[0]?.contact_number ?? '—'}</TableCell>
                                     <TableCell>{client.contact_people?.[0]?.email ?? '—'}</TableCell>

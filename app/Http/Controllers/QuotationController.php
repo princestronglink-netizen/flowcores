@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Http\Controllers\Concerns\HandlesLineItems;
 use App\Models\Client;
 use App\Models\ClientContactPerson;
+use App\Models\ItemVariant;
 use App\Models\Quotation;
 use App\Models\QuotationVersion;
 use Illuminate\Http\Request;
@@ -130,28 +131,103 @@ class QuotationController extends Controller
             ];
 
             // Only a real change creates a new version (saving without edits does nothing).
-            if ($this->hasChanges($quotation, $new, $rows)) {
-                // 1. Keep the current state as an old version, with the number it has now.
-                $quotation->versions()->create([
-                    'version'          => $quotation->version,
-                    'quotation_number' => $quotation->quotation_number,
-                    'snapshot'         => $quotation->snapshot(),
-                    'edited_by'        => auth()->id(),
-                ]);
+            $createVersion = $this->hasChanges($quotation, $new, $rows);
 
-                // 2. The live row becomes the next version: QT-2026-00012 -> -1 -> -2 -> -3 ...
-                $next                    = $quotation->version + 1;
-                $new['version']          = $next;
-                $new['quotation_number'] = $quotation->baseNumber() . '-' . $next;
-            }
-
-            $quotation->update($new);
-
-            $quotation->items()->delete();
-            $quotation->items()->createMany($rows);
+            $this->saveAsNewVersion($quotation, $new, $rows, $createVersion);
         });
 
-        return redirect()->route('quotations.index');
+        return $this->backTo($request);
+    }
+
+    /** Back to the pipeline when the edit was started from a card, otherwise to the quotations list. */
+    private function backTo(Request $request)
+    {
+        return $request->query('from') === 'pipeline'
+            ? redirect()->route('pipelines.index')
+            : redirect()->route('quotations.index');
+    }
+
+    /**
+     * Writes the new content. When $createVersion is true, the current state is first kept as an
+     * old version (with the number it has now) and the live row becomes the next version:
+     * QT-2026-00012 -> -1 -> -2 -> -3 ...
+     * Must be called inside a transaction, with the quotation row locked.
+     */
+    private function saveAsNewVersion(Quotation $quotation, array $new, array $rows, bool $createVersion = true): void
+    {
+        if ($createVersion) {
+            $quotation->versions()->create([
+                'version'          => $quotation->version,
+                'quotation_number' => $quotation->quotation_number,
+                'snapshot'         => $quotation->snapshot(),
+                'edited_by'        => auth()->id(),
+            ]);
+
+            $next                    = $quotation->version + 1;
+            $new['version']          = $next;
+            $new['quotation_number'] = $quotation->baseNumber() . '-' . $next;
+        }
+
+        $quotation->update($new);
+
+        $quotation->items()->delete();
+        $quotation->items()->createMany($rows);
+    }
+
+    /**
+     * Go back to an older version. Nothing is deleted or rewritten: the old content is copied
+     * into a NEW version on top (e.g. restoring -1 while at -3 creates -4 with the content of -1),
+     * so the full history stays intact and the restore itself can be undone the same way.
+     */
+    public function restore(Request $request, Quotation $quotation, QuotationVersion $version)
+    {
+        abort_unless($version->quotation_id === $quotation->id, 404);
+
+        $s = $version->snapshot;
+
+        // The things the old version points to must still exist.
+        if (! Client::whereKey($s['client_id'] ?? null)->exists()
+            || ! ClientContactPerson::whereKey($s['client_contact_person_id'] ?? null)->exists()) {
+            return back()->withErrors(['restore' => 'The client or contact person of that version no longer exists.']);
+        }
+
+        $variantIds = collect($s['items'] ?? [])->pluck('item_variant_id')->unique();
+        if ($variantIds->isEmpty()
+            || ItemVariant::whereIn('id', $variantIds)->count() !== $variantIds->count()) {
+            return back()->withErrors(['restore' => 'One or more items of that version no longer exist, so it cannot be restored.']);
+        }
+
+        $id      = $quotation->id;
+        $changed = false;
+
+        DB::transaction(function () use ($s, $id, &$changed) {
+            $quotation = Quotation::whereKey($id)->lockForUpdate()->firstOrFail();
+
+            $rows = collect($s['items'])->map(fn ($i) => [
+                'item_variant_id' => $i['item_variant_id'],
+                'item_name'       => $i['item_name'],
+                'brand_name'      => $i['brand_name'],
+                'quantity'        => $i['quantity'],
+                'unit_price'      => $i['unit_price'],
+            ])->all();
+
+            $new = $this->fields($s) + [
+                'amount' => collect($rows)->sum(fn ($r) => $r['quantity'] * $r['unit_price']),
+            ];
+
+            if (! $this->hasChanges($quotation, $new, $rows)) {
+                return;
+            }
+
+            $this->saveAsNewVersion($quotation, $new, $rows);
+            $changed = true;
+        });
+
+        if (! $changed) {
+            return back()->withErrors(['restore' => 'The current version is already identical to that one.']);
+        }
+
+        return redirect()->route('quotations.edit', array_filter(['quotation' => $id, 'from' => $request->query('from')]));
     }
 
     /** Compare the saved quotation with the submitted data (header fields and line items). */

@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from 'react';
 import axios from 'axios';
-import { Link, useForm } from '@inertiajs/react';
+import { Link, useForm, usePage } from '@inertiajs/react';
 import { Button } from '@/Components/ui/Button';
 import SearchSelect from '@/Components/ui/SearchSelect';
 import {
@@ -8,6 +8,7 @@ import {
     Building2,
     Lock,
     Package,
+    Percent,
     Plus,
     Receipt,
     StickyNote,
@@ -37,6 +38,8 @@ import {
 // unit_price is typed by the user for every line (variants no longer carry a price).
 const emptyItem = () => ({ item_id: '', item_brand_id: '', item_variant_id: '', quantity: 1, unit_price: '' });
 
+const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
 const emptyForm = () => ({
     name: '',
     client_id: '',
@@ -44,8 +47,26 @@ const emptyForm = () => ({
     priority: 'Medium',
     winning_message: '',
     items: [emptyItem()],
-    note: '',
+    remarks: '',
+    prepared_by: '',
+    prepared_by_position: '',
+    markup_percent: 0,
+    vat_percent: 12,
 });
+
+const emptyNewClient = () => ({
+    client_code: '',
+    client_name: '',
+    address: '',
+    contact_person: '',
+    contact_number: '',
+    email: '',
+});
+
+const emptyNewContact = () => ({ contact_person: '', contact_number: '', email: '' });
+
+/** QT-2026-00012-3 -> QT-2026-00012 */
+const baseNumber = (n) => String(n ?? '').match(/^(QT-\d{4}-\d+)(?:-\d+)?$/)?.[1] ?? n;
 
 const variantLabel = (v) => [v.unit_of_measure, v.size].filter(Boolean).join(' · ');
 
@@ -59,13 +80,25 @@ const mobileLabel = 'mb-1 block text-xs font-medium text-slate-500 lg:hidden';
  */
 export default function TransactionForm({ clients = [], catalog = [], transaction = null, itemsLocked = false }) {
     const isEditing = Boolean(transaction);
+    const { auth } = usePage().props;
+    const currentUser = auth?.user ?? {};
+
+    // Opened from a pipeline card (?from=pipeline): after saving, go back to the board.
+    const fromPipeline =
+        typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('from') === 'pipeline';
+
+    // Quotation issued and not sent yet: real edits create versions.
+    const quotationEditable = Boolean(transaction?.quotation_number) && !transaction?.quotation_frozen;
+    const nextNumber = transaction?.quotation_number
+        ? `${baseNumber(transaction.quotation_number)}-${(transaction.version ?? 0) + 1}`
+        : null;
 
     const [showWinningMessage, setShowWinningMessage] = useState(Boolean(transaction?.winning_message));
     const [clientList, setClientList] = useState(clients);
     const [showAddClient, setShowAddClient] = useState(false);
     const [showAddContact, setShowAddContact] = useState(false);
-    const [newClient, setNewClient] = useState({ client_code: '', client_name: '', contact_person: '', contact_number: '', email: '' });
-    const [newContact, setNewContact] = useState({ contact_person: '', contact_number: '', email: '' });
+    const [newClient, setNewClient] = useState(emptyNewClient());
+    const [newContact, setNewContact] = useState(emptyNewContact());
     const [quickErrors, setQuickErrors] = useState({});
     const [quickProcessing, setQuickProcessing] = useState(false);
     const [categoryFilter, setCategoryFilter] = useState('');
@@ -87,9 +120,17 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                             unit_price: i.unit_price ?? '',
                         }))
                       : [emptyItem()],
-              note: transaction.note ?? '',
+              remarks: transaction.remarks ?? '',
+              prepared_by: transaction.prepared_by ?? currentUser.name ?? '',
+              prepared_by_position: transaction.prepared_by_position ?? currentUser.position ?? '',
+              markup_percent: transaction.markup_percent ?? 0,
+              vat_percent: transaction.vat_percent ?? 12,
           }
-        : emptyForm();
+        : {
+              ...emptyForm(),
+              prepared_by: currentUser.name ?? '',
+              prepared_by_position: currentUser.position ?? '',
+          };
 
     const { data, setData, post, put, processing, errors, clearErrors } = useForm(initialData);
     const items = data.items ?? [emptyItem()];
@@ -117,11 +158,15 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
         brandsFor(row).find((b) => String(b.id) === String(row.item_brand_id))?.variants ?? [];
     const variantFor = (row) => variantsFor(row).find((v) => String(v.id) === String(row.item_variant_id));
 
-    // ---- totals ----
-    const total = useMemo(
+    // ---- totals: subtotal → markup → VAT → grand total ----
+    const subtotal = useMemo(
         () => items.reduce((s, r) => s + (Number(r.quantity) || 0) * (Number(r.unit_price) || 0), 0),
         [items],
     );
+    const markupAmount = round2(subtotal * ((Number(data.markup_percent) || 0) / 100));
+    const net = round2(subtotal + markupAmount);
+    const vatAmount = round2(net * ((Number(data.vat_percent) || 0) / 100));
+    const total = round2(net + vatAmount);
 
     // ---- delivery progress (locked orders) ----
     const deliveredAt = (index) => Number(transaction?.items?.[index]?.delivered_quantity ?? 0);
@@ -174,6 +219,16 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
     const removeItem = (i) => !itemsLocked && setData('items', items.filter((_, idx) => idx !== i));
 
     // ---- quick add ----
+    const toggleAddClient = () => {
+        setQuickErrors({});
+        setShowAddClient((v) => !v);
+    };
+
+    const toggleAddContact = () => {
+        setQuickErrors({});
+        setShowAddContact((v) => !v);
+    };
+
     const submitNewClient = async () => {
         setQuickProcessing(true);
         setQuickErrors({});
@@ -186,7 +241,7 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                 client_contact_person_id: created.contact_people[0]?.id ?? '',
             }));
             clearErrors('client_id', 'client_contact_person_id');
-            setNewClient({ client_code: '', client_name: '', contact_person: '', contact_number: '', email: '' });
+            setNewClient(emptyNewClient());
             setShowAddClient(false);
         } catch (err) {
             if (err.response?.status === 422) setQuickErrors(err.response.data.errors);
@@ -210,7 +265,7 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
             );
             setData('client_contact_person_id', created.id);
             clearErrors('client_contact_person_id');
-            setNewContact({ contact_person: '', contact_number: '', email: '' });
+            setNewContact(emptyNewContact());
             setShowAddContact(false);
         } catch (err) {
             if (err.response?.status === 422) setQuickErrors(err.response.data.errors);
@@ -221,19 +276,20 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
 
     const submit = (e) => {
         e.preventDefault();
-        if (isEditing) put(route('transactions.update', transaction.id));
-        else post(route('transactions.store'));
+        if (isEditing) {
+            put(route('transactions.update', { transaction: transaction.id, ...(fromPipeline ? { from: 'pipeline' } : {}) }));
+        } else post(route('transactions.store'));
     };
 
     const hasErrors = Object.keys(errors ?? {}).length > 0;
-    const listUrl = route('transactions.index');
+    const listUrl = fromPipeline ? route('pipelines.index') : route('transactions.index');
     const quickBox = 'mt-3 space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3';
 
     return (
         <form onSubmit={submit} noValidate className="mx-auto w-full max-w-[1680px] p-4 sm:p-6">
             <Link href={listUrl} className="mb-4 inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-slate-900">
                 <ArrowLeft className="h-4 w-4" />
-                Transactions
+                {fromPipeline ? 'Pipeline' : 'Transactions'}
             </Link>
 
             <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
@@ -271,7 +327,7 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                                     htmlFor="client_id"
                                     error={errors.client_id}
                                     action={
-                                        <LinkButton icon={Plus} onClick={() => setShowAddClient((v) => !v)}>
+                                        <LinkButton icon={Plus} onClick={toggleAddClient}>
                                             New client
                                         </LinkButton>
                                     }
@@ -296,13 +352,16 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                                 {showAddClient && (
                                     <div className={quickBox}>
                                         {[
-                                            ['client_code', 'Client code'],
-                                            ['client_name', 'Client name'],
-                                            ['contact_person', 'Contact person'],
-                                        ].map(([key, placeholder]) => (
+                                            ['client_code', 'Client code', 'text'],
+                                            ['client_name', 'Client name', 'text'],
+                                            ['address', 'Address (optional)', 'text'],
+                                            ['contact_person', 'Contact person', 'text'],
+                                            ['contact_number', 'Contact number (optional)', 'tel'],
+                                            ['email', 'Email (optional)', 'email'],
+                                        ].map(([key, placeholder, type]) => (
                                             <div key={key}>
                                                 <input
-                                                    type="text"
+                                                    type={type}
                                                     placeholder={placeholder}
                                                     value={newClient[key]}
                                                     onChange={(e) => setNewClient((p) => ({ ...p, [key]: e.target.value }))}
@@ -312,7 +371,7 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                                             </div>
                                         ))}
                                         <div className="flex justify-end gap-2 pt-1">
-                                            <Button type="button" variant="outline" onClick={() => setShowAddClient(false)}>Cancel</Button>
+                                            <Button type="button" variant="outline" onClick={toggleAddClient}>Cancel</Button>
                                             <Button type="button" variant="brand" onClick={submitNewClient} disabled={quickProcessing}>
                                                 Add client
                                             </Button>
@@ -330,7 +389,7 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                                     hint={!data.client_id ? 'Pick a client first to see its contacts.' : undefined}
                                     action={
                                         data.client_id && (
-                                            <LinkButton icon={Plus} onClick={() => setShowAddContact((v) => !v)}>
+                                            <LinkButton icon={Plus} onClick={toggleAddContact}>
                                                 New contact
                                             </LinkButton>
                                         )
@@ -366,22 +425,32 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                                                 <p className="mt-1 text-xs text-red-600">{quickErrors.contact_person[0]}</p>
                                             )}
                                         </div>
-                                        <input
-                                            type="tel"
-                                            placeholder="Contact number (optional)"
-                                            value={newContact.contact_number}
-                                            onChange={(e) => setNewContact((p) => ({ ...p, contact_number: e.target.value }))}
-                                            className={inputCls}
-                                        />
-                                        <input
-                                            type="email"
-                                            placeholder="Email (optional)"
-                                            value={newContact.email}
-                                            onChange={(e) => setNewContact((p) => ({ ...p, email: e.target.value }))}
-                                            className={inputCls}
-                                        />
+                                        <div>
+                                            <input
+                                                type="tel"
+                                                placeholder="Contact number (optional)"
+                                                value={newContact.contact_number}
+                                                onChange={(e) => setNewContact((p) => ({ ...p, contact_number: e.target.value }))}
+                                                className={input(quickErrors.contact_number)}
+                                            />
+                                            {quickErrors.contact_number && (
+                                                <p className="mt-1 text-xs text-red-600">{quickErrors.contact_number[0]}</p>
+                                            )}
+                                        </div>
+                                        <div>
+                                            <input
+                                                type="email"
+                                                placeholder="Email (optional)"
+                                                value={newContact.email}
+                                                onChange={(e) => setNewContact((p) => ({ ...p, email: e.target.value }))}
+                                                className={input(quickErrors.email)}
+                                            />
+                                            {quickErrors.email && (
+                                                <p className="mt-1 text-xs text-red-600">{quickErrors.email[0]}</p>
+                                            )}
+                                        </div>
                                         <div className="flex justify-end gap-2 pt-1">
-                                            <Button type="button" variant="outline" onClick={() => setShowAddContact(false)}>Cancel</Button>
+                                            <Button type="button" variant="outline" onClick={toggleAddContact}>Cancel</Button>
                                             <Button type="button" variant="brand" onClick={submitNewContact} disabled={quickProcessing}>
                                                 Add contact
                                             </Button>
@@ -427,7 +496,7 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                             <div className="p-4 pb-0">
                                 <Banner tone="warning" icon={Lock} title={`Items are locked (${orderedDelivered} of ${orderedTotal} delivered)`}>
                                     Items, quantities and prices can't change once goods are delivered, because that would break the
-                                    delivery and stock records. You can still edit the client, priority and notes. If the order really
+                                    delivery and stock records. You can still edit the client, priority and remarks. If the order really
                                     changed, mark this deal as lost and create a new transaction.
                                 </Banner>
                             </div>
@@ -579,21 +648,96 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                         </div>
 
                         <div className="flex items-center justify-end gap-3 border-t border-slate-100 bg-slate-50 px-5 py-3 text-sm">
-                            <span className="text-slate-500">Total</span>
-                            <span className="text-base font-semibold tabular-nums text-slate-900">{currency(total)}</span>
+                            <span className="text-slate-500">Subtotal</span>
+                            <span className="text-base font-semibold tabular-nums text-slate-900">{currency(subtotal)}</span>
                         </div>
                     </Panel>
 
-                    <Panel title="Notes" description="Optional context for your team." icon={StickyNote}>
+                    <Panel
+                        title="Markup & VAT"
+                        description="Markup is added to the subtotal first, then VAT is computed on the result."
+                        icon={Percent}
+                    >
+                        <div className="grid gap-4 md:grid-cols-2">
+                            <Field label="Markup (%)" htmlFor="markup_percent" error={errors.markup_percent} hint="0 for no markup.">
+                                <input
+                                    id="markup_percent"
+                                    type="number"
+                                    min="0"
+                                    max="1000"
+                                    step="0.01"
+                                    value={data.markup_percent}
+                                    onChange={(e) => updateField('markup_percent', e.target.value)}
+                                    className={input(errors.markup_percent)}
+                                />
+                            </Field>
+
+                            <Field
+                                label="VAT (%)"
+                                htmlFor="vat_percent"
+                                error={errors.vat_percent}
+                                action={
+                                    <span className="flex gap-3">
+                                        <LinkButton onClick={() => updateField('vat_percent', '12')}>12%</LinkButton>
+                                        <LinkButton onClick={() => updateField('vat_percent', '0')}>VAT-exempt</LinkButton>
+                                    </span>
+                                }
+                            >
+                                <input
+                                    id="vat_percent"
+                                    type="number"
+                                    min="0"
+                                    max="100"
+                                    step="0.01"
+                                    value={data.vat_percent}
+                                    onChange={(e) => updateField('vat_percent', e.target.value)}
+                                    className={input(errors.vat_percent)}
+                                />
+                            </Field>
+                        </div>
+                    </Panel>
+
+                    {transaction?.quotation_frozen && (
+                        <Banner tone="warning" icon={Lock} title="This quotation was already sent">
+                            The card is past the quotation stage, so edits no longer create a new version. Move the card
+                            back to the quotation stage to change it.
+                        </Banner>
+                    )}
+
+                    <Panel title="Prepared by" description="Printed at the bottom of the quotation." icon={UserRound}>
+                        <div className="grid gap-4 md:grid-cols-2">
+                            <Field label="Name" htmlFor="prepared_by" error={errors.prepared_by}>
+                                <input
+                                    id="prepared_by"
+                                    type="text"
+                                    value={data.prepared_by ?? ''}
+                                    onChange={(e) => updateField('prepared_by', e.target.value)}
+                                    className={input(errors.prepared_by)}
+                                />
+                            </Field>
+                            <Field label="Position" htmlFor="prepared_by_position" error={errors.prepared_by_position}>
+                                <input
+                                    id="prepared_by_position"
+                                    type="text"
+                                    placeholder="e.g. Purchasing Coordinator"
+                                    value={data.prepared_by_position ?? ''}
+                                    onChange={(e) => updateField('prepared_by_position', e.target.value)}
+                                    className={input(errors.prepared_by_position)}
+                                />
+                            </Field>
+                        </div>
+                    </Panel>
+
+                    <Panel title="Remarks" description="Printed on the quotation under Remarks." icon={StickyNote}>
                         <div className="space-y-4">
-                            <Field label="Note" htmlFor="note" error={errors.note}>
+                            <Field label="Remarks" htmlFor="remarks" error={errors.remarks}>
                                 <textarea
-                                    id="note"
+                                    id="remarks"
                                     rows={3}
-                                    placeholder="Anything else worth noting…"
-                                    value={data.note}
-                                    onChange={(e) => updateField('note', e.target.value)}
-                                    className={textareaCls(errors.note)}
+                                    placeholder="e.g. Price is valid for 30 days. Delivery within 5 working days."
+                                    value={data.remarks ?? ''}
+                                    onChange={(e) => updateField('remarks', e.target.value)}
+                                    className={textareaCls(errors.remarks)}
                                 />
                             </Field>
 
@@ -638,24 +782,59 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                     <Panel title={isEditing ? 'Edit transaction' : 'New transaction'} description="Review, then save.">
                         <dl className="space-y-3">
                             <SummaryLine label="Client">{selectedClient?.client_name ?? '—'}</SummaryLine>
+                            {selectedClient?.address && (
+                                <SummaryLine label="Address">{selectedClient.address}</SummaryLine>
+                            )}
                             <SummaryLine label="Contact">
                                 <span className="inline-flex items-center gap-1">
                                     {selectedContact && <UserRound className="h-3.5 w-3.5 text-slate-400" />}
                                     {selectedContact?.contact_person ?? '—'}
                                 </span>
                             </SummaryLine>
+                            {selectedContact?.contact_number && (
+                                <SummaryLine label="Number">{selectedContact.contact_number}</SummaryLine>
+                            )}
+                            {selectedContact?.email && (
+                                <SummaryLine label="Email">{selectedContact.email}</SummaryLine>
+                            )}
                             <SummaryLine label="Priority">
                                 <PriorityPill value={data.priority} />
                             </SummaryLine>
                             <SummaryLine label="Line items">{items.length}</SummaryLine>
+                            {transaction?.quotation_number && (
+                                <SummaryLine label="Quotation">{transaction.quotation_number}</SummaryLine>
+                            )}
                         </dl>
 
-                        <div className="mt-4 flex items-baseline justify-between border-t border-slate-100 pt-4">
-                            <span className="text-sm text-slate-500">Total</span>
-                            <span className="text-2xl font-semibold tabular-nums tracking-tight text-slate-900">{currency(total)}</span>
-                        </div>
+                        <dl className="mt-4 space-y-1.5 border-t border-slate-100 pt-4 text-sm">
+                            <div className="flex justify-between text-slate-500">
+                                <dt>Subtotal</dt>
+                                <dd className="tabular-nums text-slate-700">{currency(subtotal)}</dd>
+                            </div>
+                            {markupAmount > 0 && (
+                                <div className="flex justify-between text-slate-500">
+                                    <dt>Markup ({Number(data.markup_percent) || 0}%)</dt>
+                                    <dd className="tabular-nums text-slate-700">{currency(markupAmount)}</dd>
+                                </div>
+                            )}
+                            <div className="flex justify-between text-slate-500">
+                                <dt>VAT ({Number(data.vat_percent) || 0}%)</dt>
+                                <dd className="tabular-nums text-slate-700">{currency(vatAmount)}</dd>
+                            </div>
+                            <div className="flex items-baseline justify-between border-t border-slate-100 pt-3">
+                                <dt className="text-sm text-slate-500">Grand total</dt>
+                                <dd className="text-2xl font-semibold tabular-nums tracking-tight text-slate-900">{currency(total)}</dd>
+                            </div>
+                        </dl>
 
                         <div className="mt-4 space-y-2">
+                            {quotationEditable && (
+                                <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                                    Changing the client, items, markup, VAT, remarks or prepared-by keeps the current quotation in the
+                                    history and creates <b className="text-slate-900">{nextNumber}</b>. Changing only the priority or
+                                    winning message, or saving without changes, creates nothing.
+                                </p>
+                            )}
                             {shortages.length > 0 && (
                                 <Banner tone="warning" title="Not enough stock yet">
                                     {shortages.length} {shortages.length === 1 ? 'variant is' : 'variants are'} short. You can still save, but

@@ -60,14 +60,14 @@ const stageFlags = [
     {
         flag: 'creates_quotation',
         icon: FileText,
-        title: 'Quotation is auto-generated here',
-        text: 'When a transaction enters this stage, a draft quotation is created from its client and items. Only one stage can be chosen.',
+        title: 'Quotation number is issued here',
+        text: 'When a transaction enters this stage it is issued a quotation number (QT-...) and can be printed as a quotation. While the card stays here, every real edit creates a new version (-1, -2, ...). Once the card moves past this stage the quotation is frozen as sent. Only one stage can be chosen.',
     },
     {
         flag: 'creates_client_po',
         icon: ClipboardList,
         title: 'Client purchase order is auto-generated here',
-        text: "When a transaction enters this stage, a draft client PO is created from the accepted quotation. Confirming it sets the transaction's final items and amount. The card can't leave this stage until it is confirmed. Only one stage can be chosen.",
+        text: "When a transaction enters this stage, a draft client PO is created from the transaction. Confirming it sets the transaction's final items and amount. The card can't leave this stage until it is confirmed. Only one stage can be chosen.",
     },
 ];
 

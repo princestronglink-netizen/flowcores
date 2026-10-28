@@ -12,6 +12,7 @@ class Client extends Model
     protected $fillable = [
         'client_code',
         'client_name',
+        'address',
     ];
 
     public function contactPeople() : HasMany 

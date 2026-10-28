@@ -6,11 +6,11 @@ use App\Http\Controllers\DeliveryController;
 use App\Http\Controllers\ItemCategoryController;
 use App\Http\Controllers\ItemController;
 use App\Http\Controllers\PipelineController;
-use App\Http\Controllers\QuotationController;
 use App\Http\Controllers\StockAdjustController;
 use App\Http\Controllers\StockInController;
 use App\Http\Controllers\StockMovementController;
 use App\Http\Controllers\TransactionController;
+use App\Http\Controllers\TransactionQuotationController;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
@@ -29,12 +29,16 @@ Route::middleware(['auth'])->group(function () {
     Route::patch('transactions/{transaction}/status', [TransactionController::class, 'updateStatus'])
         ->name('transactions.updateStatus');
 
-    // ---- Quotations (created by the pipeline, so no create/store) ----
-    Route::resource('quotations', QuotationController::class)->except(['show', 'create', 'store']);
-    Route::get('quotations/{quotation}/print', [QuotationController::class, 'print'])->name('quotations.print');
-    // Print an older version of a quotation (rebuilt from its stored snapshot).
-    Route::get('quotations/{quotation}/versions/{version}/print', [QuotationController::class, 'printVersion'])
-        ->name('quotations.versions.print');
+    // ---- Quotations: a document of the transaction (issued by the pipeline, edited in the transaction) ----
+    Route::get('quotations', [TransactionQuotationController::class, 'index'])->name('quotations.index');
+    Route::get('transactions/{transaction}/quotation/print', [TransactionQuotationController::class, 'print'])
+        ->name('transactions.quotation.print');
+    // Print an older version (rebuilt from its stored snapshot).
+    Route::get('transactions/{transaction}/versions/{version}/print', [TransactionQuotationController::class, 'printVersion'])
+        ->name('transactions.versions.print');
+    // Go back to an older version (copies it into a new version, history is kept).
+    Route::post('transactions/{transaction}/versions/{version}/restore', [TransactionQuotationController::class, 'restore'])
+        ->name('transactions.versions.restore');
 
     // ---- Client purchase orders (created by the pipeline, so no create/store) ----
     Route::resource('client-purchase-orders', ClientPurchaseOrderController::class)->only(['index', 'edit', 'update', 'destroy']);

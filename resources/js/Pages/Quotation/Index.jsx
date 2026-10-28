@@ -1,40 +1,29 @@
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout';
 import PageHeading from '@/Components/PageHeading';
 import PageCard from '@/Components/PageCard';
-import ConfirmDelete from '@/Components/ConfirmationModal/ConfirmDelete';
-import StockToast from '@/Components/Pipeline/StockToast';
-import { Head, Link, usePage } from '@inertiajs/react';
+import { Head, Link } from '@inertiajs/react';
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/Components/ui/table';
 import { Button } from '@/Components/ui/Button';
-import { Pencil, Printer, Trash2 } from 'lucide-react';
-import { useEffect, useState } from 'react';
-import { Banner, currency } from '@/Components/ui/kit';
+import { Pencil, Printer } from 'lucide-react';
+import { currency } from '@/Components/ui/kit';
 
+/**
+ * A quotation is a document of a transaction, so this list is the transactions that have been
+ * issued a quotation number. Editing happens in the transaction.
+ */
 export default function Index({ quotations }) {
-    const { errors, flash } = usePage().props;
-    const [deleting, setDeleting] = useState(null);
-    const [toast, setToast] = useState(null);
-
-    useEffect(() => {
-        if (flash?.stock) setToast(flash.stock);
-    }, [flash?.stock]);
-
-    const firstError = Object.values(errors ?? {})[0];
-
     return (
         <AuthenticatedLayout
             header={
                 <PageHeading
                     title="Quotations"
-                    subtitle="Generated automatically from the pipeline. Edit or print them here."
+                    subtitle="Issued when a transaction reaches the quotation stage. Print them here, edit them in the transaction."
                 />
             }
         >
             <Head title="Quotations" />
             <PageCard>
                 <div className="p-5">
-                    {firstError && <div className="mb-4"><Banner tone="error">{firstError}</Banner></div>}
-
                     {quotations.length === 0 ? (
                         <p className="py-14 text-center text-sm text-slate-500">
                             No quotations yet. They appear when a transaction reaches the quotation stage.
@@ -45,48 +34,54 @@ export default function Index({ quotations }) {
                                 <TableRow>
                                     <TableHead>Quotation</TableHead>
                                     <TableHead>Client</TableHead>
-                                    <TableHead>Valid until</TableHead>
-                                    <TableHead>Transaction</TableHead>
+                                    <TableHead>Prepared by</TableHead>
+                                    <TableHead>Stage</TableHead>
                                     <TableHead className="text-right">Amount</TableHead>
                                     <TableHead className="text-right">Actions</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {quotations.map((q) => (
-                                    <TableRow key={q.id}>
+                                {quotations.map((t) => (
+                                    <TableRow key={t.id}>
                                         <TableCell>
-                                            <p className="font-medium text-slate-900">{q.quotation_number}</p>
-                                            <p className="text-xs text-slate-500">{q.subject}</p>
+                                            <p className="font-medium text-slate-900">{t.quotation_number}</p>
+                                            <p className="text-xs text-slate-500">{t.name}</p>
                                             <span
                                                 className={
                                                     'mt-1 inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ' +
-                                                    (q.version > 0
+                                                    (t.version > 0
                                                         ? 'bg-amber-50 text-amber-700 ring-amber-200'
                                                         : 'bg-slate-100 text-slate-600 ring-slate-200')
                                                 }
                                             >
-                                                {q.version_label}
+                                                {t.version_label}
                                             </span>
+                                            {t.quotation_frozen && (
+                                                <span className="ml-1 mt-1 inline-flex rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-700 ring-1 ring-inset ring-sky-200">
+                                                    Sent
+                                                </span>
+                                            )}
                                         </TableCell>
                                         <TableCell>
-                                            <p>{q.client?.client_name}</p>
-                                            <p className="text-xs text-slate-500">{q.contact_person?.contact_person}</p>
+                                            <p>{t.client?.client_name}</p>
+                                            <p className="text-xs text-slate-500">{t.contact_person?.contact_person}</p>
                                         </TableCell>
-                                        <TableCell className={q.is_expired ? 'font-medium text-red-600' : ''}>
-                                            {q.valid_until ?? '—'}{q.is_expired && ' (expired)'}
+                                        <TableCell>
+                                            <p>{t.prepared_by ?? '—'}</p>
+                                            <p className="text-xs text-slate-500">{t.prepared_by_position ?? ''}</p>
                                         </TableCell>
-                                        <TableCell>{q.transaction?.name ?? '—'}</TableCell>
-                                        <TableCell className="text-right font-medium tabular-nums">{currency(q.amount)}</TableCell>
+                                        <TableCell>
+                                            <p>{t.stage?.stage_name ?? '—'}</p>
+                                            <p className="text-xs capitalize text-slate-500">{t.status}</p>
+                                        </TableCell>
+                                        <TableCell className="text-right font-medium tabular-nums">{currency(t.amount)}</TableCell>
                                         <TableCell className="flex flex-wrap justify-end gap-2">
-                                            <a href={route('quotations.print', q.id)} target="_blank" rel="noreferrer">
+                                            <a href={route('transactions.quotation.print', t.id)} target="_blank" rel="noreferrer">
                                                 <Button variant="outline" size="icon" aria-label="Print"><Printer className="h-4 w-4" /></Button>
                                             </a>
-                                            <Link href={route('quotations.edit', q.id)}>
-                                                <Button variant="outline" size="icon" aria-label="Edit"><Pencil className="h-4 w-4" /></Button>
+                                            <Link href={route('transactions.edit', t.id)}>
+                                                <Button variant="outline" size="icon" aria-label="Edit transaction"><Pencil className="h-4 w-4" /></Button>
                                             </Link>
-                                            <Button variant="outline" size="icon" aria-label="Delete" onClick={() => setDeleting(q)}>
-                                                <Trash2 className="h-4 w-4" />
-                                            </Button>
                                         </TableCell>
                                     </TableRow>
                                 ))}
@@ -95,16 +90,6 @@ export default function Index({ quotations }) {
                     )}
                 </div>
             </PageCard>
-
-            <ConfirmDelete
-                show={Boolean(deleting)}
-                onClose={() => setDeleting(null)}
-                deleteUrl={deleting ? route('quotations.destroy', deleting.id) : null}
-                itemLabel={deleting ? deleting.quotation_number : 'this quotation'}
-                title="Delete quotation?"
-            />
-
-            <StockToast message={toast} title="Done" onClose={() => setToast(null)} />
         </AuthenticatedLayout>
     );
 }

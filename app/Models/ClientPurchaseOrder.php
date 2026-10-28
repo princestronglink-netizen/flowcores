@@ -137,8 +137,7 @@ class ClientPurchaseOrder extends Model
             return null;
         }
 
-        $quotation = $tx->quotations()->latest('id')->first();
-        $lines     = $quotation ? $quotation->items()->get() : $tx->items()->get();
+        $lines = $tx->items()->get();
 
         if ($lines->isEmpty()) {
             return null;
@@ -147,9 +146,8 @@ class ClientPurchaseOrder extends Model
         $po = static::create([
             'status'                   => 'draft',
             'amount'                   => $lines->sum(fn ($l) => $l->quantity * $l->unit_price),
-            'note'                     => $quotation ? "From quotation {$quotation->quotation_number}" : null,
+            'note'                     => $tx->quotation_number ? "From quotation {$tx->quotation_number}" : null,
             'transaction_id'           => $tx->id,
-            'quotation_id'             => $quotation?->id,
             'client_id'                => $tx->client_id,
             'client_contact_person_id' => $tx->client_contact_person_id,
             'created_by'               => $by,

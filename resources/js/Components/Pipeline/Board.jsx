@@ -1,5 +1,5 @@
 import { useDraggable, useDroppable } from '@dnd-kit/core';
-import { CheckCircle2, History, Package, Truck, Undo2, XCircle } from 'lucide-react';
+import { CheckCircle2, GripVertical, History, Inbox, Truck, Undo2, XCircle } from 'lucide-react';
 import { cx, priorityMeta } from '@/Components/ui/kit';
 
 /* Visual parts of the pipeline board. Drag/drop and move logic stays in Pages/Pipeline/Index.jsx. */
@@ -28,35 +28,102 @@ export function deliveryTotals(transaction) {
     };
 }
 
-/** Name, client, priority and amount. Used on the card and on the drag overlay. */
+const initials = (name) =>
+    String(name ?? '?')
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((w) => w[0])
+        .join('')
+        .toUpperCase() || '?';
+
+/** Small coloured chip. */
+function Chip({ children, className }) {
+    return (
+        <span className={cx('inline-flex items-center rounded-md px-1.5 py-0.5 text-[11px] font-medium leading-none', className)}>
+            {children}
+        </span>
+    );
+}
+
+/** The documents the pipeline generated, shown as tiny chips (only when they exist). */
+function DocChips({ item }) {
+    const cpos = item.client_purchase_orders ?? [];
+    const draftPo = cpos.some((c) => c.status === 'draft');
+    if (!item.quotation_number && cpos.length === 0) return null;
+
+    return (
+        <div className="flex flex-wrap items-center gap-1">
+            {item.quotation_number && (
+                <Chip className="bg-sky-50 text-sky-700 ring-1 ring-inset ring-sky-200">{item.quotation_number}</Chip>
+            )}
+            {cpos.length > 0 && (
+                <Chip
+                    className={
+                        draftPo
+                            ? 'bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200'
+                            : 'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200'
+                    }
+                >
+                    {draftPo ? 'PO to confirm' : 'PO confirmed'}
+                </Chip>
+            )}
+        </div>
+    );
+}
+
+/**
+ * Card content: name, client + contact, amount. Used on the card and on the drag overlay.
+ * Priority shows as the coloured bar on the left edge; High / Critical also get a label.
+ */
 export function CardBody({ item }) {
-    // Quotation and PO cards have no priority: they show a small kind tag instead.
     const p = item.priority ? priorityMeta(item.priority) : null;
-    const lines = item.items?.length ?? 0;
+    const urgent = item.priority === 'High' || item.priority === 'Critical';
+    const clientName = item.client?.client_name;
+    const contact = item.contact_person?.contact_person;
+
     return (
         <>
+            <span
+                className={cx('absolute inset-y-0 left-0 w-1', p ? p.dot : 'bg-slate-300')}
+                title={item.priority ? `${item.priority} priority` : undefined}
+                aria-hidden="true"
+            />
+
             <div className="flex items-start justify-between gap-2">
-                <p className="min-w-0 truncate text-sm font-semibold text-slate-900">{item.name}</p>
-                {p ? (
-                    <span className="mt-1 flex shrink-0 items-center gap-1.5 text-xs text-slate-500" title={`${item.priority} priority`}>
-                        <span className={cx('h-2 w-2 rounded-full', p.dot)} />
+                <p className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-900">{item.name}</p>
+                {urgent && (
+                    <Chip
+                        className={
+                            item.priority === 'Critical'
+                                ? 'bg-red-50 text-red-700 ring-1 ring-inset ring-red-200'
+                                : 'bg-orange-50 text-orange-700 ring-1 ring-inset ring-orange-200'
+                        }
+                    >
                         {item.priority}
-                    </span>
-                ) : (
-                    item.kind && (
-                        <span className="mt-0.5 shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-500">
-                            {item.kind === 'quotation' ? 'Quote' : 'PO'}
-                        </span>
-                    )
+                    </Chip>
+                )}
+                {!p && item.kind && (
+                    <Chip className="bg-slate-100 uppercase text-slate-500">{item.kind === 'quotation' ? 'Quote' : 'PO'}</Chip>
                 )}
             </div>
-            <p className="mt-0.5 truncate text-xs text-slate-500">{item.client?.client_name ?? 'No client'}</p>
-            <div className="mt-3 flex items-center justify-between">
-                <span className="text-sm font-semibold tabular-nums text-slate-900">{currency(item.total)}</span>
-                <span className="flex items-center gap-1 text-xs text-slate-400">
-                    <Package className="h-3.5 w-3.5" />
-                    {lines} {lines === 1 ? 'item' : 'items'}
+
+            <div className="mt-2 flex items-center gap-2">
+                <span
+                    className="flex size-6 shrink-0 items-center justify-center rounded-full bg-[#eef1f5] text-[10px] font-semibold text-[#667292]"
+                    aria-hidden="true"
+                >
+                    {initials(clientName)}
                 </span>
+                <div className="min-w-0 leading-tight">
+                    <p className="truncate text-xs font-medium text-slate-700">{clientName ?? 'No client'}</p>
+                    {contact && <p className="truncate text-[11px] text-slate-400">{contact}</p>}
+                </div>
+            </div>
+
+            <div className="mt-2.5 flex items-center justify-between gap-2">
+                <span className="text-sm font-semibold tabular-nums text-slate-900">{currency(item.total)}</span>
+                <DocChips item={item} />
             </div>
         </>
     );
@@ -64,7 +131,7 @@ export function CardBody({ item }) {
 
 export function OverlayCard({ item }) {
     return (
-        <div className="w-72 rotate-1 rounded-lg border border-slate-200 bg-white p-3 shadow-xl ring-1 ring-black/5">
+        <div className="relative w-72 rotate-1 overflow-hidden rounded-lg border border-slate-200 bg-white p-3 pl-4 shadow-xl ring-1 ring-black/5">
             <CardBody item={item} />
         </div>
     );
@@ -80,14 +147,14 @@ function DeliveryProgress({ ordered, delivered }) {
               : { text: 'Delivered', cls: 'text-emerald-700', bar: 'bg-emerald-500' };
 
     return (
-        <div className="mt-3">
-            <div className="flex items-center justify-between text-xs">
+        <div className="mt-3 border-t border-slate-100 pt-2.5">
+            <div className="flex items-center justify-between text-[11px]">
                 <span className={cx('font-medium', state.cls)}>{state.text}</span>
                 <span className="tabular-nums text-slate-500">
                     {delivered}/{ordered}
                 </span>
             </div>
-            <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-slate-100">
+            <div className="mt-1 h-1 overflow-hidden rounded-full bg-slate-100">
                 <div className={cx('h-full rounded-full transition-all', state.bar)} style={{ width: `${pct}%` }} />
             </div>
         </div>
@@ -121,12 +188,18 @@ function TransactionCard({ item, showDelivery = false, canDeliver = false, onDel
                 if (e.target.closest('button')) return; // Deliver / Return / History buttons
                 onOpen?.(item);
             }}
+            onKeyDown={(e) => {
+                if (e.key === 'Enter' && e.target === e.currentTarget) onOpen?.(item);
+            }}
             className={cx(
-                'touch-none cursor-grab rounded-lg border border-slate-200 bg-white p-3 shadow-sm transition',
-                'hover:border-slate-300 hover:shadow active:cursor-grabbing',
+                'group relative touch-none cursor-grab overflow-hidden rounded-lg border border-slate-200 bg-white p-3 pl-4 shadow-sm transition',
+                'hover:-translate-y-px hover:border-slate-300 hover:shadow-md active:cursor-grabbing',
+                'focus:outline-none focus-visible:ring-2 focus-visible:ring-[#667292]/50',
                 isDragging && 'opacity-30',
             )}
         >
+            <GripVertical className="pointer-events-none absolute right-1 top-1/2 size-4 -translate-y-1/2 text-slate-300 opacity-0 transition group-hover:opacity-100" />
+
             <CardBody item={item} />
 
             {showDelivery && isTransaction && (
@@ -134,13 +207,13 @@ function TransactionCard({ item, showDelivery = false, canDeliver = false, onDel
                     <DeliveryProgress ordered={ordered} delivered={delivered} />
 
                     {(canDeliver || delivered > 0 || hasHistory) && (
-                        <div className="mt-3 flex gap-2 border-t border-slate-100 pt-3">
+                        <div className="mt-2.5 flex gap-2">
                             {canDeliver && delivered < ordered && (
                                 <button
                                     type="button"
                                     onPointerDown={stop}
                                     onClick={() => onDeliveryAction(item, 'deliver')}
-                                    className={cx(action, 'flex-1 bg-[#667292] text-white hover:bg-[#3a4157]')}
+                                    className={cx(action, 'flex-1 bg-[#667292] text-white shadow-sm hover:bg-[#3a4157]')}
                                 >
                                     <Truck className="size-3.5" />
                                     {delivered > 0 ? 'Deliver more' : 'Deliver'}
@@ -185,38 +258,46 @@ export function StageColumn({
     showDelivery = false,
     onDeliveryAction,
     onOpen,
+    emptyText = 'No cards here',
 }) {
     const { setNodeRef, isOver } = useDroppable({ id: `stage-${stage.id}`, disabled });
+    const stageTotal = items.reduce((s, i) => s + Number(i.total ?? 0), 0);
 
     return (
         <div
             ref={setNodeRef}
             className={cx(
-                'flex w-[85vw] shrink-0 snap-start flex-col overflow-hidden rounded-xl bg-slate-100/80 ring-1 ring-slate-200 transition',
+                'flex w-[85vw] shrink-0 snap-start flex-col overflow-hidden rounded-xl bg-slate-50 ring-1 ring-slate-200 transition',
                 'sm:w-auto sm:min-w-[17rem] sm:flex-1 sm:shrink sm:basis-0',
                 isOver && 'bg-[#667292]/10 ring-2 ring-[#667292]',
                 disabled && 'opacity-40',
             )}
         >
-            <div className="flex shrink-0 items-center justify-between px-3.5 py-3">
-                <div className="flex min-w-0 items-center gap-2">
-                    <span className={cx('size-2.5 shrink-0 rounded-full', accent.dot)} />
-                    <h3 className="truncate text-sm font-semibold text-slate-800">{stage.stage_name}</h3>
-                    {stage.deducts_stock && (
-                        <span title="Deliveries are recorded in this stage">
-                            <Truck className="size-3.5 shrink-0 text-slate-400" />
-                        </span>
-                    )}
+            {/* thin accent line on top of every column */}
+            <div className={cx('h-1 shrink-0', accent.dot)} />
+
+            <div className="shrink-0 px-3.5 pb-2 pt-3">
+                <div className="flex items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                        <h3 className="truncate text-sm font-semibold text-slate-800">{stage.stage_name}</h3>
+                        {stage.deducts_stock && (
+                            <span title="Deliveries are recorded in this stage">
+                                <Truck className="size-3.5 shrink-0 text-slate-400" />
+                            </span>
+                        )}
+                    </div>
+                    <span className={cx('rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums', accent.badge)}>
+                        {items.length}
+                    </span>
                 </div>
-                <span className={cx('ml-2 rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums', accent.badge)}>
-                    {items.length}
-                </span>
+                <p className="mt-0.5 text-xs tabular-nums text-slate-400">{items.length > 0 ? currency(stageTotal) : '—'}</p>
             </div>
 
-            <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-2.5 pb-2.5 [scrollbar-width:thin]">
+            <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-2.5 pb-2.5 [scrollbar-width:thin]">
                 {items.length === 0 ? (
-                    <div className="flex flex-1 items-center justify-center rounded-lg border-2 border-dashed border-slate-200 py-8 text-xs text-slate-400">
-                        {disabled ? 'Can’t move here' : 'No cards'}
+                    <div className="flex flex-1 flex-col items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-slate-200 py-10 text-xs text-slate-400">
+                        <Inbox className="size-5" />
+                        {disabled ? 'Can’t move here' : emptyText}
                     </div>
                 ) : (
                     items.map((item) => (
@@ -238,17 +319,17 @@ export function StageColumn({
 const dropZones = {
     done: {
         label: 'Done deal',
-        hint: 'Drag here from the final stage',
+        hint: 'Drop here from the final stage',
         Icon: CheckCircle2,
         base: 'border-emerald-200 bg-emerald-50/60 text-emerald-700',
-        over: 'border-emerald-500 bg-emerald-100',
+        over: 'border-emerald-500 bg-emerald-100 scale-[1.01]',
     },
     lost: {
         label: 'Lost deal',
-        hint: 'Drag here from any stage',
+        hint: 'Drop here from any stage',
         Icon: XCircle,
         base: 'border-red-200 bg-red-50/60 text-red-700',
-        over: 'border-red-500 bg-red-100',
+        over: 'border-red-500 bg-red-100 scale-[1.01]',
     },
 };
 
@@ -260,7 +341,7 @@ export function DealDropZone({ variant, count = 0, disabled = false }) {
         <div
             ref={setNodeRef}
             className={cx(
-                'flex items-center gap-3 rounded-xl border-2 border-dashed px-4 py-3 transition',
+                'flex items-center gap-3 rounded-xl border-2 border-dashed px-4 py-2.5 transition',
                 isOver ? over : base,
                 disabled && 'opacity-40',
             )}

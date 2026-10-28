@@ -1,433 +1,379 @@
-import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout';
-import PageHeading from '@/Components/PageHeading';
-import PageCard from '@/Components/PageCard';
-import PageToolbar from '@/Components/PageToolbar';
-import PipelineModal from '@/Components/Pipeline/PipelineModal';
-import DealResultOverlay from '@/Components/Pipeline/DealResultOverlay';
-import StockToast from '@/Components/Pipeline/StockToast';
-import DeliveryModal from '@/Components/Pipeline/DeliveryModal';
-import MoveConfirmModal from '@/Components/Pipeline/MoveConfirmModal';
-import CardDetailModal from '@/Components/Pipeline/CardDetailModal';
-import ConfirmDelete from '@/Components/ConfirmationModal/ConfirmDelete';
-import { StageColumn, DealDropZone, OverlayCard, stageAccents, deliveryTotals, cardKey } from '@/Components/Pipeline/Board';
-import { Head, router, usePage } from '@inertiajs/react';
+import { useMemo } from 'react';
+import { Link, useForm } from '@inertiajs/react';
 import { Button } from '@/Components/ui/Button';
-import { Pencil, Plus } from 'lucide-react';
-import { useEffect, useState } from 'react';
-import { DndContext, DragOverlay, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
+import SearchSelect from '@/Components/ui/SearchSelect';
+import { ArrowLeft, FileText, Plus, Trash2 } from 'lucide-react';
+import {
+    Banner,
+    Field,
+    IconButton,
+    Panel,
+    SummaryLine,
+    cx,
+    currency,
+    input,
+    inputCls,
+} from '@/Components/ui/kit';
 
-const DEFAULT_WIN_MESSAGE = '🎉 Great job! This deal is officially closed-won!';
-const DEFAULT_LOSE_MESSAGE = "This one didn't close, but the next one will 💪";
+/* ------------------------------------------------------------------ *
+ * Catalog: the server sends the sellable variants. This accepts the common
+ * shapes (flat variants, items with variants, or items > brands > variants)
+ * and turns them into one flat list.
+ * ------------------------------------------------------------------ */
+const normalizeVariant = (v, itemName, brandName) => ({
+    id: v.item_variant_id ?? v.id,
+    item_name: v.item_name ?? itemName ?? '',
+    brand_name: v.brand_name ?? v.brand?.brand_name ?? brandName ?? '',
+    spec: [v.unit_of_measure, v.size].filter(Boolean).join(' · '),
+    price: v.unit_price ?? v.price ?? null,
+});
 
-function resolveResultMessage(transaction, status) {
-    if (status === 'won') {
-        return transaction.winning_message?.trim() ? transaction.winning_message : DEFAULT_WIN_MESSAGE;
-    }
-    return DEFAULT_LOSE_MESSAGE;
-}
+const flattenCatalog = (catalog) => {
+    const list = Array.isArray(catalog) ? catalog : Object.values(catalog ?? {});
+    const out = [];
 
-// Per card kind: which routes to call, and which status word means "won" / "lost".
-// Transaction cards have no `kind`; quotation and PO cards do.
-// (Only transaction cards exist on the board now, so the other kinds are never hit.)
-const KINDS = {
-    transaction: { stage: 'transactions.updateStage', status: 'transactions.updateStatus', won: 'won', lost: 'lost' },
-    purchase_order: { stage: 'purchase-orders.updateStage', status: 'purchase-orders.updateStatus', won: 'received', lost: 'cancelled' },
+    list.forEach((entry) => {
+        if (!entry) return;
+        if (Array.isArray(entry.brands)) {
+            entry.brands.forEach((b) =>
+                (b.variants ?? []).forEach((v) => out.push(normalizeVariant(v, entry.item_name, b.brand_name))),
+            );
+        } else if (Array.isArray(entry.variants)) {
+            entry.variants.forEach((v) => out.push(normalizeVariant(v, entry.item_name, entry.brand_name)));
+        } else {
+            out.push(normalizeVariant(entry));
+        }
+    });
+
+    return out.filter((v) => v.id != null);
 };
-const kindOf = (t) => KINDS[t?.kind] ?? KINDS.transaction;
-const isTransaction = (t) => !t?.kind;
 
-export default function Index({ pipelines }) {
-    const { flash } = usePage().props;
+const variantLabel = (v) =>
+    [v.item_name, v.brand_name && `— ${v.brand_name}`, v.spec && `(${v.spec})`].filter(Boolean).join(' ');
 
-    const [isOpen, setIsOpen] = useState(false);
-    const [editingPipeline, setEditingPipeline] = useState(null);
-    const [deletingPipeline, setDeletingPipeline] = useState(null);
-    const [pipelineList, setPipelineList] = useState(pipelines);
-    const [pendingMove, setPendingMove] = useState(null);
-    const [isMoving, setIsMoving] = useState(false);
+const baseNumber = (n) => String(n ?? '').match(/^(QT-\d{4}-\d+)(?:-\d+)?$/)?.[1] ?? n;
 
-    // { id, mode: 'deliver' | 'return' | 'history' }. Transactions only. Only the id is stored so the modal reads fresh data.
-    const [delivery, setDelivery] = useState(null);
+let keyCounter = 0;
+const newKey = () => `row-${++keyCounter}`;
+const emptyLine = () => ({ _key: newKey(), item_variant_id: '', quantity: 1, unit_price: 0 });
 
-    // cardKey of the card whose details are open. Only the key is stored so the modal reads fresh data.
-    const [viewingKey, setViewingKey] = useState(null);
+const contactsOf = (client) => client?.contact_people ?? client?.contactPeople ?? [];
 
-    const [resultEffect, setResultEffect] = useState(null);
+export default function QuotationForm({ clients = [], catalog = [], quotation = null }) {
+    const isEditing = Boolean(quotation);
+    // Opened from a pipeline card (?from=pipeline): after saving, go back to the board.
+    const fromPipeline =
+        typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('from') === 'pipeline';
 
-    // Toasts
-    const [stockMessage, setStockMessage] = useState(null);
-    const [stockWarning, setStockWarning] = useState(null);
-    const [stockReturned, setStockReturned] = useState(null);
-    const [notice, setNotice] = useState(null); // "you can't do that" messages
+    const { data, setData, put, processing, errors, clearErrors } = useForm({
+        subject: quotation?.subject ?? '',
+        client_id: quotation?.client_id ?? '',
+        client_contact_person_id: quotation?.client_contact_person_id ?? '',
+        valid_until: quotation?.valid_until ?? '',
+        note: quotation?.note ?? '',
+        terms: quotation?.terms ?? '',
+        items:
+            quotation?.items?.length > 0
+                ? quotation.items.map((i) => ({
+                      _key: newKey(),
+                      item_variant_id: i.item_variant_id,
+                      quantity: i.quantity,
+                      unit_price: i.unit_price,
+                  }))
+                : [emptyLine()],
+    });
 
-    const [activeItem, setActiveItem] = useState(null);
-    const [activeStageId, setActiveStageId] = useState(null);
+    /* ---------------------------- options ---------------------------- */
+    const variants = useMemo(() => {
+        const list = flattenCatalog(catalog);
+        const known = new Set(list.map((v) => v.id));
 
-    useEffect(() => {
-        setPipelineList(pipelines);
-    }, [pipelines]);
+        // Lines already on the quotation stay selectable even if the catalog no longer lists them.
+        (quotation?.items ?? []).forEach((i) => {
+            if (!known.has(i.item_variant_id)) {
+                list.push(normalizeVariant({ id: i.item_variant_id, item_name: i.item_name, brand_name: i.brand_name }));
+                known.add(i.item_variant_id);
+            }
+        });
 
-    useEffect(() => {
-        if (flash?.stock) setStockMessage(flash.stock);
-    }, [flash?.stock]);
+        return list;
+    }, [catalog, quotation]);
 
-    useEffect(() => {
-        if (flash?.stock_warning) setStockWarning(flash.stock_warning);
-    }, [flash?.stock_warning]);
+    const variantById = useMemo(() => new Map(variants.map((v) => [v.id, v])), [variants]);
+    const variantOptions = useMemo(() => variants.map((v) => ({ value: v.id, label: variantLabel(v) })), [variants]);
 
-    useEffect(() => {
-        if (flash?.stock_returned) setStockReturned(flash.stock_returned);
-    }, [flash?.stock_returned]);
-
-    // One pipeline only.
-    const selectedPipeline = pipelineList[0];
-
-    const stages = [...(selectedPipeline?.stages ?? [])].sort((a, b) => a.sort_order - b.sort_order);
-
-    // The card (and its stage) shown in the detail modal.
-    const viewing = viewingKey
-        ? stages
-              .flatMap((s) => (s.transactions ?? []).map((card) => ({ card, stage: s })))
-              .find((x) => cardKey(x.card) === viewingKey) ?? null
-        : null;
-
-    // ---- Delivery modal data (transactions only) ----
-    const deliveryIndex = stages.findIndex((s) => s.deducts_stock);
-
-    const deliveryTransaction =
-        stages.flatMap((s) => s.transactions ?? []).find((t) => isTransaction(t) && t.id === delivery?.id) ?? null;
-
-    const txStageIndex = stages.findIndex((s) =>
-        (s.transactions ?? []).some((t) => isTransaction(t) && t.id === delivery?.id)
+    const clientOptions = useMemo(
+        () => clients.map((c) => ({ value: c.id, label: c.client_name })),
+        [clients],
     );
 
-    // A return only sends the card back if it is already past the delivery stage.
-    const movesBackTo =
-        delivery?.mode === 'return' && deliveryIndex >= 0 && txStageIndex > deliveryIndex
-            ? stages[deliveryIndex].stage_name
-            : null;
+    const selectedClient = clients.find((c) => String(c.id) === String(data.client_id));
+    const contactOptions = useMemo(
+        () => contactsOf(selectedClient).map((p) => ({ value: p.id, label: p.contact_person })),
+        [selectedClient],
+    );
 
-    // Stages can't be skipped: while dragging, only the neighbouring stages accept a drop.
-    // Transactions can finish only from the final stage. Quotations and POs can finish from any stage.
-    // "Lost Deal" is always allowed. Quotations and POs can't enter the delivery stage.
-    const activeIndex = stages.findIndex((s) => s.id === activeStageId);
-    const isAllowedStage = (index) => {
-        if (activeIndex === -1) return true;
-        if (Math.abs(index - activeIndex) > 1) return false;
-        if (activeItem && !isTransaction(activeItem) && stages[index]?.deducts_stock) return false;
-        return true;
-    };
-    const canFinish =
-        activeIndex === -1 || activeIndex === stages.length - 1 || (activeItem && !isTransaction(activeItem));
-
-    const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
-
-    const findCard = (key) => {
-        for (const stage of stages) {
-            const found = (stage.transactions ?? []).find((t) => cardKey(t) === key);
-            if (found) return { stage, card: found };
-        }
-        return { stage: null, card: null };
+    /* ----------------------------- helpers ----------------------------- */
+    const updateField = (field, value) => {
+        setData(field, value);
+        if (String(value ?? '').trim() !== '') clearErrors(field);
     };
 
-    const handleDragStart = (event) => {
-        const { stage, card } = findCard(String(event.active.id));
-        if (card) {
-            setActiveItem(card);
-            setActiveStageId(stage.id);
-        }
+    const changeClient = (clientId) => {
+        // A contact person belongs to one client, so reset it when the client changes.
+        setData((prev) => ({ ...prev, client_id: clientId, client_contact_person_id: '' }));
+        clearErrors('client_id', 'client_contact_person_id');
     };
 
-    const handleDragEnd = (event) => {
-        setActiveItem(null);
-        setActiveStageId(null);
-
-        if (pendingMove) return;
-
-        const { active, over } = event;
-        if (!over) return;
-
-        const overId = String(over.id);
-        const { stage: sourceStage, card: transaction } = findCard(String(active.id));
-        if (!transaction) return;
-
-        const isTx = isTransaction(transaction);
-        const sourceIndex = stages.findIndex((s) => s.id === sourceStage.id);
-        const { ordered, delivered } = deliveryTotals(transaction);
-
-        // ---- Done / Lost ----
-        if (overId === 'done' && isTx && sourceIndex !== stages.length - 1) return;
-
-        if (overId === 'done' || overId === 'lost') {
-            if (overId === 'done' && isTx && deliveryIndex >= 0 && delivered < ordered) {
-                setNotice('Deliver every item in full before marking the deal as done.');
-                return;
-            }
-
-            setPendingMove({
-                type: 'status',
-                transaction,
-                sourceStage,
-                status: overId === 'done' ? 'won' : 'lost',
-                label: overId === 'done' ? 'Done Deal' : 'Lost Deal',
-            });
-            return;
-        }
-
-        // ---- Stage → stage ----
-        const targetStageId = Number(overId.replace('stage-', ''));
-        if (!targetStageId || sourceStage.id === targetStageId) return;
-
-        const targetStage = stages.find((s) => s.id === targetStageId);
-        const targetIndex = stages.findIndex((s) => s.id === targetStageId);
-        if (!targetStage || Math.abs(targetIndex - sourceIndex) !== 1) return;
-
-        if (!isTx && targetStage.deducts_stock) {
-            setNotice('Only transactions can go to the delivery stage.');
-            return;
-        }
-
-        // Same rules as the server, checked first so the user gets a clear message.
-        if (isTx && deliveryIndex >= 0) {
-            if (sourceIndex === deliveryIndex && targetIndex > sourceIndex && delivered < ordered) {
-                setNotice('Deliver every item in full before moving past the delivery stage.');
-                return;
-            }
-            if (targetIndex < deliveryIndex && delivered > 0) {
-                setNotice('Return the delivered items first, then move this transaction back.');
-                return;
-            }
-        }
-
-        setPendingMove({ type: 'stage', transaction, sourceStage, targetStage });
-    };
-
-    // options = { restock, reason } from MoveConfirmModal; only used when a lost deal still has delivered items.
-    const confirmMove = (options = {}) => {
-        if (!pendingMove || isMoving) return;
-        setIsMoving(true);
-
-        if (pendingMove.type === 'status') {
-            const { transaction, sourceStage, status } = pendingMove;
-            const message = resolveResultMessage(transaction, status);
-            const k = kindOf(transaction);
-            const isTx = isTransaction(transaction);
-
-            setPipelineList((prev) =>
-                prev.map((pipeline) => {
-                    if (pipeline.id !== selectedPipeline.id) return pipeline;
-                    return {
-                        ...pipeline,
-                        stages: pipeline.stages.map((stage) =>
-                            stage.id === sourceStage.id
-                                ? {
-                                      ...stage,
-                                      transactions: stage.transactions.filter((t) => cardKey(t) !== cardKey(transaction)),
-                                  }
-                                : stage
-                        ),
-                        // the Done / Lost counters count transactions only
-                        won_count: isTx && status === 'won' ? (pipeline.won_count ?? 0) + 1 : pipeline.won_count,
-                        lost_count: isTx && status === 'lost' ? (pipeline.lost_count ?? 0) + 1 : pipeline.lost_count,
-                    };
-                })
-            );
-
-            router.patch(
-                route(k.status, transaction.id),
-                {
-                    status: k[status], // 'won' | 'lost' -> the right word for this record type
-                    restock: options.restock ?? true,
-                    reason: options.reason ?? null,
-                },
-                {
-                    preserveScroll: true,
-                    preserveState: true,
-                    onSuccess: () => setResultEffect({ type: status, message }),
-                    onError: (errors) => {
-                        setPipelineList(pipelines);
-                        setNotice(Object.values(errors)[0]);
-                    },
-                    onFinish: () => {
-                        setIsMoving(false);
-                        setPendingMove(null);
-                    },
-                }
-            );
-            return;
-        }
-
-        const { transaction, sourceStage, targetStage } = pendingMove;
-
-        setPipelineList((prev) =>
-            prev.map((pipeline) => {
-                if (pipeline.id !== selectedPipeline.id) return pipeline;
-                return {
-                    ...pipeline,
-                    stages: pipeline.stages.map((stage) => {
-                        if (stage.id === sourceStage.id) {
-                            return {
-                                ...stage,
-                                transactions: stage.transactions.filter((t) => cardKey(t) !== cardKey(transaction)),
-                            };
-                        }
-                        if (stage.id === targetStage.id) {
-                            const withoutDuplicate = (stage.transactions ?? []).filter(
-                                (t) => cardKey(t) !== cardKey(transaction)
-                            );
-                            return { ...stage, transactions: [transaction, ...withoutDuplicate] };
-                        }
-                        return stage;
-                    }),
-                };
-            })
+    const updateLine = (index, patch) =>
+        setData(
+            'items',
+            data.items.map((line, i) => (i === index ? { ...line, ...patch } : line)),
         );
 
-        router.patch(
-            route(kindOf(transaction).stage, transaction.id),
-            { pipeline_stage_id: targetStage.id },
-            {
-                preserveScroll: true,
-                preserveState: true,
-                onSuccess: () => {
-                    // Transaction moved into the delivery stage: open the delivery modal for convenience.
-                    if (isTransaction(transaction) && targetStage.deducts_stock) {
-                        setDelivery({ id: transaction.id, mode: 'deliver' });
-                    }
-                },
-                onError: (errors) => {
-                    setPipelineList(pipelines);
-                    setNotice(Object.values(errors)[0]);
-                },
-                onFinish: () => {
-                    setIsMoving(false);
-                    setPendingMove(null);
-                },
-            }
-        );
+    const pickVariant = (index, variantId) => {
+        const v = variantById.get(variantId);
+        const patch = { item_variant_id: variantId };
+        // Suggest the catalog price when the line has no price yet.
+        if (v?.price != null && !Number(data.items[index].unit_price)) patch.unit_price = v.price;
+        updateLine(index, patch);
+        clearErrors(`items.${index}.item_variant_id`);
     };
 
-    const cancelMove = () => {
-        if (isMoving) return;
-        setPendingMove(null);
+    const addLine = () => setData('items', [...data.items, emptyLine()]);
+    const removeLine = (index) => setData('items', data.items.filter((_, i) => i !== index));
+
+    const total = useMemo(
+        () => data.items.reduce((s, l) => s + (Number(l.quantity) || 0) * (Number(l.unit_price) || 0), 0),
+        [data.items],
+    );
+
+    const submit = (e) => {
+        e.preventDefault();
+        if (!isEditing) return; // quotations are created by the pipeline, not from this form
+        put(route('quotations.update', { quotation: quotation.id, ...(fromPipeline ? { from: 'pipeline' } : {}) }));
     };
 
-    const openCreate = () => {
-        setEditingPipeline(null);
-        setIsOpen(true);
-    };
+    const hasErrors = Object.keys(errors ?? {}).length > 0;
+    const listUrl = fromPipeline ? route('pipelines.index') : route('quotations.index');
+    const nextNumber = isEditing ? `${baseNumber(quotation.quotation_number)}-${(quotation.version ?? 0) + 1}` : null;
 
-    const openEdit = (pipeline) => {
-        setEditingPipeline(pipeline);
-        setIsOpen(true);
-    };
-
-    const closeModal = () => {
-        setIsOpen(false);
-        setEditingPipeline(null);
-    };
+    const lineGrid = 'sm:grid-cols-[minmax(0,2.4fr)_90px_130px_130px_32px]';
+    const mobileLabel = 'mb-1 block text-xs font-medium text-slate-500 sm:hidden';
 
     return (
-        <AuthenticatedLayout header={<PageHeading title="Pipelines" subtitle="Manage the pipeline and its stages." />}>
-            <Head title="Pipelines" />
+        <form onSubmit={submit} noValidate className="mx-auto w-full max-w-[1680px] p-4 sm:p-6">
+            <Link href={listUrl} className="mb-4 inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-slate-900">
+                <ArrowLeft className="h-4 w-4" />
+                {fromPipeline ? 'Pipeline' : 'Quotations'}
+            </Link>
 
-            <PageCard
-                toolbar={
-                    <PageToolbar>
-                        {selectedPipeline ? (
-                            <Button variant="brand" onClick={() => openEdit(selectedPipeline)}>
-                                <Pencil />
-                                Edit Pipeline & Stages
-                            </Button>
-                        ) : (
-                            <Button variant="brand" onClick={openCreate}>
+            <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
+                <div className="min-w-0 space-y-5">
+                    <Panel title="Quotation details" description="Who is it for, and what is it about?" icon={FileText}>
+                        <div className="grid gap-4 md:grid-cols-2">
+                            <Field label="Subject" required htmlFor="subject" error={errors.subject} className="md:col-span-2">
+                                <input
+                                    id="subject"
+                                    type="text"
+                                    placeholder="e.g. Paint supplies for Building A"
+                                    value={data.subject}
+                                    onChange={(e) => updateField('subject', e.target.value)}
+                                    className={input(errors.subject)}
+                                />
+                            </Field>
+
+                            <Field label="Client" required htmlFor="client_id" error={errors.client_id}>
+                                <SearchSelect
+                                    id="client_id"
+                                    ariaLabel="Client"
+                                    placeholder="Select client"
+                                    searchPlaceholder="Type a client"
+                                    emptyText="No clients found"
+                                    options={clientOptions}
+                                    value={data.client_id}
+                                    onChange={changeClient}
+                                    inputClassName={input(errors.client_id)}
+                                />
+                            </Field>
+
+                            <Field
+                                label="Contact person"
+                                required
+                                htmlFor="client_contact_person_id"
+                                error={errors.client_contact_person_id}
+                            >
+                                <SearchSelect
+                                    id="client_contact_person_id"
+                                    ariaLabel="Contact person"
+                                    placeholder={data.client_id ? 'Select contact person' : 'Select a client first'}
+                                    searchPlaceholder="Type a name"
+                                    emptyText="No contact people found"
+                                    options={contactOptions}
+                                    value={data.client_contact_person_id}
+                                    onChange={(v) => updateField('client_contact_person_id', v)}
+                                    inputClassName={input(errors.client_contact_person_id)}
+                                />
+                            </Field>
+
+                            <Field label="Valid until" htmlFor="valid_until" error={errors.valid_until}>
+                                <input
+                                    id="valid_until"
+                                    type="date"
+                                    value={data.valid_until ?? ''}
+                                    onChange={(e) => updateField('valid_until', e.target.value)}
+                                    className={input(errors.valid_until)}
+                                />
+                            </Field>
+                        </div>
+                    </Panel>
+
+                    <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
+                        <header className="flex items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
+                            <div>
+                                <h3 className="text-sm font-semibold text-slate-900">Items</h3>
+                                <p className="text-xs text-slate-500">What is being offered, and at what price.</p>
+                            </div>
+                            <Button type="button" variant="outline" onClick={addLine}>
                                 <Plus />
-                                Create pipeline
+                                Add item
                             </Button>
+                        </header>
+
+                        {typeof errors.items === 'string' && <p className="px-5 pt-3 text-xs text-red-600">{errors.items}</p>}
+
+                        <div className={cx('hidden gap-3 border-b border-slate-100 bg-slate-50 px-5 py-2 text-xs font-medium text-slate-500 sm:grid', lineGrid)}>
+                            <span>Item</span>
+                            <span>Qty</span>
+                            <span>Unit price</span>
+                            <span className="text-right">Subtotal</span>
+                            <span />
+                        </div>
+
+                        <div className="divide-y divide-slate-100">
+                            {data.items.map((line, index) => {
+                                const key = (f) => `items.${index}.${f}`;
+                                const subtotal = (Number(line.quantity) || 0) * (Number(line.unit_price) || 0);
+
+                                return (
+                                    <div key={line._key} className={cx('grid grid-cols-1 gap-3 px-5 py-3 sm:items-start', lineGrid)}>
+                                        <div>
+                                            <span className={mobileLabel}>Item</span>
+                                            <SearchSelect
+                                                ariaLabel="Item"
+                                                placeholder="Select item"
+                                                searchPlaceholder="Type an item or brand"
+                                                emptyText="No items found"
+                                                options={variantOptions}
+                                                value={line.item_variant_id}
+                                                onChange={(v) => pickVariant(index, v)}
+                                                inputClassName={input(errors[key('item_variant_id')])}
+                                            />
+                                            {errors[key('item_variant_id')] && (
+                                                <p className="mt-1 text-xs text-red-600">{errors[key('item_variant_id')]}</p>
+                                            )}
+                                        </div>
+
+                                        <div>
+                                            <span className={mobileLabel}>Qty</span>
+                                            <input
+                                                aria-label="Quantity"
+                                                type="number"
+                                                min="1"
+                                                step="1"
+                                                value={line.quantity}
+                                                onChange={(e) => updateLine(index, { quantity: e.target.value })}
+                                                className={input(errors[key('quantity')])}
+                                            />
+                                            {errors[key('quantity')] && <p className="mt-1 text-xs text-red-600">{errors[key('quantity')]}</p>}
+                                        </div>
+
+                                        <div>
+                                            <span className={mobileLabel}>Unit price</span>
+                                            <input
+                                                aria-label="Unit price"
+                                                type="number"
+                                                min="0"
+                                                step="0.01"
+                                                value={line.unit_price}
+                                                onChange={(e) => updateLine(index, { unit_price: e.target.value })}
+                                                className={input(errors[key('unit_price')])}
+                                            />
+                                            {errors[key('unit_price')] && <p className="mt-1 text-xs text-red-600">{errors[key('unit_price')]}</p>}
+                                        </div>
+
+                                        <div className="flex items-center justify-between sm:h-9 sm:justify-end">
+                                            <span className="text-xs text-slate-500 sm:hidden">Subtotal</span>
+                                            <span className="text-sm font-semibold tabular-nums text-slate-900">{currency(subtotal)}</span>
+                                        </div>
+
+                                        <div className="flex justify-end sm:h-9 sm:items-center">
+                                            {data.items.length > 1 && (
+                                                <IconButton icon={Trash2} label="Remove item" danger onClick={() => removeLine(index)} />
+                                            )}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </section>
+
+                    <Panel title="Terms and notes" description="Terms are printed on the quotation. The note is internal.">
+                        <div className="grid gap-4 md:grid-cols-2">
+                            <Field label="Terms" htmlFor="terms" error={errors.terms}>
+                                <textarea
+                                    id="terms"
+                                    rows={4}
+                                    placeholder="Price is valid for 30 days."
+                                    value={data.terms ?? ''}
+                                    onChange={(e) => updateField('terms', e.target.value)}
+                                    className={cx(inputCls, 'resize-y')}
+                                />
+                            </Field>
+                            <Field label="Internal note" htmlFor="note" error={errors.note}>
+                                <textarea
+                                    id="note"
+                                    rows={4}
+                                    placeholder="Optional"
+                                    value={data.note ?? ''}
+                                    onChange={(e) => updateField('note', e.target.value)}
+                                    className={cx(inputCls, 'resize-y')}
+                                />
+                            </Field>
+                        </div>
+                    </Panel>
+                </div>
+
+                {/* Sticky summary */}
+                <aside className="xl:sticky xl:top-20">
+                    <Panel title="Edit quotation" description="Review, then save.">
+                        <dl className="space-y-3">
+                            <SummaryLine label="Number">{quotation?.quotation_number ?? '—'}</SummaryLine>
+                            <SummaryLine label="Client">{selectedClient?.client_name ?? '—'}</SummaryLine>
+                            <SummaryLine label="Items">{data.items.length}</SummaryLine>
+                            <SummaryLine label="Total">{currency(total)}</SummaryLine>
+                        </dl>
+
+                        {isEditing && (
+                            <p className="mt-4 rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                                Saving a change keeps the current version in the history and creates{' '}
+                                <b className="text-slate-900">{nextNumber}</b>. Saving without changes creates nothing.
+                            </p>
                         )}
-                    </PageToolbar>
-                }
-            >
-                {pipelineList.length === 0 ? (
-                    <p className="py-8 text-center text-sm text-muted-foreground">
-                        No pipeline yet. Create it to get started.
-                    </p>
-                ) : (
-                    <div className="flex h-[calc(100dvh-13rem)] min-h-[500px] w-full min-w-0 flex-col gap-3 sm:h-[calc(100dvh-9rem)]">
-                        <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-                            <div className="flex min-h-0 w-full min-w-0 flex-1 snap-x snap-mandatory gap-3 overflow-x-auto sm:snap-none sm:gap-4">
-                                {stages.map((stage, index) => (
-                                    <StageColumn
-                                        key={stage.id}
-                                        stage={stage}
-                                        items={stage.transactions ?? []}
-                                        accent={stageAccents[index % stageAccents.length]}
-                                        disabled={!isAllowedStage(index)}
-                                        showDelivery={deliveryIndex >= 0 && index >= deliveryIndex}
-                                        onDeliveryAction={(t, mode) => setDelivery({ id: t.id, mode })}
-                                        onOpen={(card) => setViewingKey(cardKey(card))}
-                                    />
-                                ))}
-                            </div>
 
-                            <div className="grid shrink-0 grid-cols-1 gap-3 sm:grid-cols-2">
-                                <DealDropZone variant="done" count={selectedPipeline?.won_count ?? 0} disabled={!canFinish} />
-                                <DealDropZone variant="lost" count={selectedPipeline?.lost_count ?? 0} />
-                            </div>
+                        {hasErrors && <Banner tone="error" className="mt-4">Fix the highlighted fields before saving.</Banner>}
 
-                            <DragOverlay>{activeItem && <OverlayCard item={activeItem} />}</DragOverlay>
-                        </DndContext>
-                    </div>
-                )}
-            </PageCard>
-
-            <PipelineModal show={isOpen} onClose={closeModal} pipeline={editingPipeline} />
-
-            <ConfirmDelete
-                show={Boolean(deletingPipeline)}
-                onClose={() => setDeletingPipeline(null)}
-                deleteUrl={deletingPipeline ? route('pipelines.destroy', deletingPipeline.id) : null}
-                itemLabel={
-                    deletingPipeline ? `"${deletingPipeline.pipeline_name}" and all of its stages` : 'this pipeline'
-                }
-                title="Delete pipeline?"
-            />
-
-            <MoveConfirmModal
-                pendingMove={pendingMove}
-                isMoving={isMoving}
-                onConfirm={confirmMove}
-                onCancel={cancelMove}
-            />
-
-            <CardDetailModal
-                item={viewing?.card ?? null}
-                stageName={viewing?.stage.stage_name}
-                onClose={() => setViewingKey(null)}
-            />
-
-            <DealResultOverlay result={resultEffect} onClose={() => setResultEffect(null)} />
-
-            <StockToast message={stockMessage} title="Done" onClose={() => setStockMessage(null)} />
-
-            <StockToast
-                message={stockWarning}
-                title="Delivery not recorded"
-                tone="warning"
-                onClose={() => setStockWarning(null)}
-            />
-
-            <StockToast message={stockReturned} title="Stock updated" onClose={() => setStockReturned(null)} />
-
-            <StockToast message={notice} title="Can't do that" tone="warning" onClose={() => setNotice(null)} />
-
-            <DeliveryModal
-                transaction={deliveryTransaction}
-                mode={delivery?.mode}
-                movesBackTo={movesBackTo}
-                onClose={() => setDelivery(null)}
-                onCancel={() => setDelivery(null)}
-            />
-        </AuthenticatedLayout>
+                        <div className="mt-5 flex flex-col gap-2">
+                            <Button type="submit" variant="brand" className="w-full" disabled={processing || !isEditing}>
+                                {processing ? 'Saving…' : 'Save changes'}
+                            </Button>
+                            <Link href={listUrl} className="block">
+                                <Button type="button" variant="outline" className="w-full">Cancel</Button>
+                            </Link>
+                        </div>
+                    </Panel>
+                </aside>
+            </div>
+        </form>
     );
 }

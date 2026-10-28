@@ -9,6 +9,7 @@ use App\Models\ItemVariant;
 use App\Models\Pipeline;
 use App\Models\PipelineStage;
 use App\Models\Transaction;
+use App\Models\TransactionVersion;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
@@ -54,6 +55,22 @@ class TransactionController extends Controller
             'catalog'     => $this->catalog(),
             // Same rule update() uses: once anything was delivered (or deducted the old way), items are frozen.
             'itemsLocked' => $transaction->deliveries()->exists() || $transaction->isLegacyDeducted(),
+            // Older quotation versions (the current one is the transaction itself), newest first.
+            'versions'    => $transaction->quotationVersions()
+                ->with('editor:id,name')
+                ->get()
+                ->sortByDesc('version')
+                ->values()
+                ->map(fn (TransactionVersion $v) => [
+                    'id'               => $v->id,
+                    'version'          => $v->version,
+                    'version_label'    => $v->version > 0 ? "Version {$v->version}" : 'Initial',
+                    'quotation_number' => $v->quotation_number,
+                    'amount'           => $v->snapshot['amount'] ?? 0,
+                    'item_count'       => count($v->snapshot['items'] ?? []),
+                    'replaced_at'      => $v->created_at?->toIso8601String(),
+                    'edited_by'        => $v->editor?->name,
+                ]),
         ]);
     }
 
@@ -81,7 +98,12 @@ class TransactionController extends Controller
             'client_contact_person_id' => 'required|exists:client_contact_people,id',
             'priority'                 => 'required|in:Low,Medium,High,Critical',
             'winning_message'          => 'nullable|string',
-            'note'                     => 'nullable|string',
+            // Remarks are printed on the quotation.
+            'remarks'                  => 'nullable|string',
+            'prepared_by'              => 'nullable|string|max:255',
+            'prepared_by_position'     => 'nullable|string|max:255',
+            'markup_percent'           => 'required|numeric|min:0|max:1000',
+            'vat_percent'              => 'required|numeric|min:0|max:100',
         ], $this->itemRules());
     }
 
@@ -123,12 +145,20 @@ class TransactionController extends Controller
             ]);
         }
 
-        $amount   = collect($validated['items'])->sum(fn ($item) => $item['quantity'] * $item['unit_price']);
+        // Subtotal -> markup -> VAT -> grand total (the amount stored on the transaction).
+        $subtotal = collect($validated['items'])->sum(fn ($item) => $item['quantity'] * $item['unit_price']);
+        $amount   = Transaction::breakdown(
+            (float) $subtotal,
+            (float) $validated['markup_percent'],
+            (float) $validated['vat_percent'],
+        )['total'];
+
         $itemRows = $this->buildItemRows($validated['items']);
 
+        $user     = auth()->user();
         $messages = [];
 
-        DB::transaction(function () use ($validated, $pipeline, $initialStage, $amount, $itemRows, &$messages) {
+        DB::transaction(function () use ($validated, $pipeline, $initialStage, $amount, $itemRows, $user, &$messages) {
             $transaction = Transaction::create([
                 'name'                     => $validated['name'],
                 'client_id'                => $validated['client_id'],
@@ -138,8 +168,13 @@ class TransactionController extends Controller
                 'status'                   => 'open',
                 'priority'                 => $validated['priority'],
                 'winning_message'          => $validated['winning_message'] ?? null,
-                'note'                     => $validated['note'] ?? null,
+                'remarks'                  => $validated['remarks'] ?? null,
+                // Prepared by defaults to the logged-in user (name + position).
+                'prepared_by'              => $validated['prepared_by'] ?? $user?->name,
+                'prepared_by_position'     => $validated['prepared_by_position'] ?? $user?->position,
                 'amount'                   => $amount,
+                'markup_percent'           => $validated['markup_percent'],
+                'vat_percent'              => $validated['vat_percent'],
             ]);
 
             $transaction->items()->createMany($itemRows);
@@ -162,34 +197,44 @@ class TransactionController extends Controller
     public function update(Request $request, Transaction $transaction)
     {
         $validated = $request->validate($this->transactionRules());
+        $itemRows  = $this->buildItemRows($validated['items']);
 
-        $amount   = collect($validated['items'])->sum(fn ($item) => $item['quantity'] * $item['unit_price']);
-        $itemRows = $this->buildItemRows($validated['items']);
+        $fields = [
+            'name'                     => $validated['name'],
+            'client_id'                => $validated['client_id'],
+            'client_contact_person_id' => $validated['client_contact_person_id'],
+            'priority'                 => $validated['priority'],
+            'winning_message'          => $validated['winning_message'] ?? null,
+            'remarks'                  => $validated['remarks'] ?? null,
+            'prepared_by'              => $validated['prepared_by'] ?? null,
+            'prepared_by_position'     => $validated['prepared_by_position'] ?? null,
+            'markup_percent'           => $validated['markup_percent'],
+            'vat_percent'              => $validated['vat_percent'],
+        ];
 
-        DB::transaction(function () use ($validated, $transaction, $amount, $itemRows) {
-            $fields = [
-                'name'                     => $validated['name'],
-                'client_id'                => $validated['client_id'],
-                'client_contact_person_id' => $validated['client_contact_person_id'],
-                'priority'                 => $validated['priority'],
-                'winning_message'          => $validated['winning_message'] ?? null,
-                'note'                     => $validated['note'] ?? null,
-            ];
+        // Once anything has been delivered (or deducted the old way), the items are
+        // locked: replacing them would erase the delivery records.
+        $itemsLocked = $transaction->deliveries()->exists() || $transaction->isLegacyDeducted();
 
-            // Once anything has been delivered (or deducted the old way), the items are
-            // locked: replacing them would erase the delivery records.
-            if ($transaction->deliveries()->exists() || $transaction->isLegacyDeducted()) {
-                $transaction->update($fields);
-                return;
-            }
+        // Creates the next quotation version when something printed on it really changed.
+        $newVersion = $transaction->saveEdit($fields, $itemsLocked ? null : $itemRows, auth()->id());
 
-            $transaction->update($fields + ['amount' => $amount]);
+        // Markup / VAT may have changed without the items changing: keep `amount` correct either way.
+        $transaction->refresh()->syncAmount();
 
-            $transaction->items()->delete();
-            $transaction->items()->createMany($itemRows);
-        });
+        $response = $this->backTo($request);
 
-        return redirect()->route('transactions.index');
+        return $newVersion
+            ? $response->with('stock', "Saved as {$transaction->quotation_number}.")
+            : $response;
+    }
+
+    /** Back to the pipeline when the edit was started from a card, otherwise to the list. */
+    private function backTo(Request $request)
+    {
+        return $request->query('from') === 'pipeline'
+            ? redirect()->route('pipelines.index')
+            : redirect()->route('transactions.index');
     }
 
     public function updateStage(Request $request, Transaction $transaction)

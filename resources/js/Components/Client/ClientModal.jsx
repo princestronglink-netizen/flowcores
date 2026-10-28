@@ -5,6 +5,7 @@ import { useForm } from '@inertiajs/react';
 import {
     Building2,
     Hash,
+    MapPin,
     UserRound,
     Mail,
     Phone,
@@ -25,6 +26,7 @@ const emptyContact = () => ({ contact_person: '', contact_number: '', email: '' 
 const emptyForm = () => ({
     client_code: '',
     client_name: '',
+    address: '',
     contacts: [emptyContact()],
 });
 
@@ -42,6 +44,7 @@ export default function ClientModal({ show, onClose, client }) {
             setData({
                 client_code: client.client_code ?? '',
                 client_name: client.client_name ?? '',
+                address: client.address ?? '',
                 contacts:
                     client.contact_people?.length > 0
                         ? client.contact_people.map((c) => ({
@@ -173,6 +176,23 @@ export default function ClientModal({ show, onClose, client }) {
                             />
                             {errors.client_name && <p className={errorClass}>{errors.client_name}</p>}
                         </div>
+                    </div>
+
+                    <div>
+                        <label htmlFor="address" className={labelClass} style={labelStyle}>
+                            <MapPin className="h-3.5 w-3.5" />
+                            Address
+                        </label>
+                        <textarea
+                            id="address"
+                            rows={2}
+                            placeholder="Street, city, province, ZIP"
+                            value={data.address}
+                            onChange={(e) => updateField('address', e.target.value)}
+                            className={fieldClass}
+                            style={errors.address ? errorInputStyle : inputStyle}
+                        />
+                        {errors.address && <p className={errorClass}>{errors.address}</p>}
                     </div>
 
                     <div className="space-y-3">
