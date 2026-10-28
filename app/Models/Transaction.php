@@ -245,6 +245,19 @@ class Transaction extends Model
         return $this->deliveredQuantity() > 0;
     }
 
+    /**
+     * ADDED: true when stock was deducted the old way (before delivery records existed):
+     * a "delivery" ledger row that belongs to this transaction but to no delivery record.
+     * Used by ClientPurchaseOrder::lockReason().
+     */
+    public function isLegacyDeducted(): bool
+    {
+        return StockMovement::where('transaction_id', $this->id)
+            ->where('type', StockMovement::TYPE_DELIVERY)
+            ->whereNull('delivery_id')
+            ->exists();
+    }
+
     public function isFullyDelivered(): bool
     {
         return $this->items()
