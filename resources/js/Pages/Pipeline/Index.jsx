@@ -395,7 +395,7 @@ export default function Index({ pipelines = [] }) {
                         />
 
                         <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-                            <div className="flex min-h-[360px] w-full min-w-0 flex-1 snap-x snap-mandatory gap-3 overflow-x-auto pb-1 sm:snap-none sm:gap-4">
+                            <div className="flex min-h-0 w-full min-w-0 flex-1 snap-x snap-mandatory items-stretch gap-3 overflow-x-auto pb-1 sm:snap-none sm:gap-4">
                                 {stages.map((stage, index) => (
                                     <StageColumn
                                         key={stage.id}

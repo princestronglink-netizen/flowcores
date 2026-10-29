@@ -65,6 +65,57 @@ const emptyNewClient = () => ({
 
 const emptyNewContact = () => ({ contact_person: '', contact_number: '', email: '' });
 
+/* ---------------- Quick-add validation (mirrors ClientController rules) ---------------- */
+
+const isEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+
+const tooLong = (label, max) => [`${label} may not be longer than ${max} characters.`];
+
+/** Contact fields shared by both quick-add boxes. */
+const validateContactFields = (c) => {
+    const e = {};
+    const person = c.contact_person.trim();
+    const number = c.contact_number.trim();
+    const email = c.email.trim();
+
+    if (!person) e.contact_person = ['Contact person is required.'];
+    else if (person.length > 255) e.contact_person = tooLong('Contact person', 255);
+
+    if (number.length > 255) e.contact_number = tooLong('Contact number', 255);
+
+    if (email && !isEmail(email)) e.email = ['Enter a valid email address.'];
+    else if (email.length > 255) e.email = tooLong('Email', 255);
+
+    return e;
+};
+
+const validateNewClient = (c) => {
+    const e = validateContactFields(c);
+    const name = c.client_name.trim();
+
+    if (!name) e.client_name = ['Client name is required.'];
+    else if (name.length > 255) e.client_name = tooLong('Client name', 255);
+
+    if (c.address.trim().length > 500) e.address = tooLong('Address', 500);
+
+    return e;
+};
+
+// [key, placeholder, input type, required]
+const NEW_CLIENT_FIELDS = [
+    ['client_name', 'Client name', 'text', true],
+    ['address', 'Address (optional)', 'text', false],
+    ['contact_person', 'Contact person', 'text', true],
+    ['contact_number', 'Contact number (optional)', 'tel', false],
+    ['email', 'Email (optional)', 'email', false],
+];
+
+const NEW_CONTACT_FIELDS = [
+    ['contact_person', 'Contact person name', 'text', true],
+    ['contact_number', 'Contact number (optional)', 'tel', false],
+    ['email', 'Email (optional)', 'email', false],
+];
+
 /** QT-2026-00012-3 -> QT-2026-00012 */
 const baseNumber = (n) => String(n ?? '').match(/^(QT-\d{4}-\d+)(?:-\d+)?$/)?.[1] ?? n;
 
@@ -119,6 +170,7 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
     const [newClient, setNewClient] = useState(emptyNewClient());
     const [newContact, setNewContact] = useState(emptyNewContact());
     const [quickErrors, setQuickErrors] = useState({});
+    const [quickMessage, setQuickMessage] = useState(null); // non-validation failures (network, 500, expired session)
     const [quickProcessing, setQuickProcessing] = useState(false);
     const [categoryFilter, setCategoryFilter] = useState('');
     const [showAddress, setShowAddress] = useState(false);
@@ -265,19 +317,52 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
     // ---- quick add ----
     const toggleAddClient = () => {
         setQuickErrors({});
+        setQuickMessage(null);
         setShowAddClient((v) => !v);
     };
 
     const toggleAddContact = () => {
         setQuickErrors({});
+        setQuickMessage(null);
         setShowAddContact((v) => !v);
     };
 
+    // Typing in a field clears just that field's error.
+    const clearQuickError = (key) => {
+        setQuickMessage(null);
+        setQuickErrors((prev) => {
+            if (!prev[key]) return prev;
+            const { [key]: _removed, ...rest } = prev;
+            return rest;
+        });
+    };
+
+    const handleQuickFailure = (err) => {
+        if (err.response?.status === 422) {
+            setQuickErrors(err.response.data.errors ?? {});
+        } else if (err.response?.status === 419) {
+            setQuickMessage('Your session expired. Refresh the page and try again.');
+        } else if (!err.response) {
+            setQuickMessage('Could not reach the server. Check your connection and try again.');
+        } else {
+            setQuickMessage('Something went wrong while saving. Please try again.');
+        }
+    };
+
     const submitNewClient = async () => {
+        const found = validateNewClient(newClient);
+        if (Object.keys(found).length > 0) {
+            setQuickErrors(found);
+            setQuickMessage(null);
+            return;
+        }
+
         setQuickProcessing(true);
         setQuickErrors({});
+        setQuickMessage(null);
         try {
-            const { data: created } = await axios.post(route('clients.quickStore'), newClient);
+            const payload = Object.fromEntries(Object.entries(newClient).map(([k, v]) => [k, v.trim()]));
+            const { data: created } = await axios.post(route('clients.quickStore'), payload);
             setClientList((prev) => [...prev, created]);
             setData((prev) => ({
                 ...prev,
@@ -288,7 +373,7 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
             setNewClient(emptyNewClient());
             setShowAddClient(false);
         } catch (err) {
-            if (err.response?.status === 422) setQuickErrors(err.response.data.errors);
+            handleQuickFailure(err);
         } finally {
             setQuickProcessing(false);
         }
@@ -296,10 +381,20 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
 
     const submitNewContact = async () => {
         if (!data.client_id) return;
+
+        const found = validateContactFields(newContact);
+        if (Object.keys(found).length > 0) {
+            setQuickErrors(found);
+            setQuickMessage(null);
+            return;
+        }
+
         setQuickProcessing(true);
         setQuickErrors({});
+        setQuickMessage(null);
         try {
-            const { data: created } = await axios.post(route('clients.quickStoreContact', data.client_id), newContact);
+            const payload = Object.fromEntries(Object.entries(newContact).map(([k, v]) => [k, v.trim()]));
+            const { data: created } = await axios.post(route('clients.quickStoreContact', data.client_id), payload);
             setClientList((prev) =>
                 prev.map((c) =>
                     String(c.id) === String(data.client_id)
@@ -312,7 +407,7 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
             setNewContact(emptyNewContact());
             setShowAddContact(false);
         } catch (err) {
-            if (err.response?.status === 422) setQuickErrors(err.response.data.errors);
+            handleQuickFailure(err);
         } finally {
             setQuickProcessing(false);
         }
@@ -396,28 +491,32 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
 
                                 {showAddClient && (
                                     <div className={quickBox}>
-                                        {[
-                                            ['client_name', 'Client name', 'text'],
-                                            ['address', 'Address (optional)', 'text'],
-                                            ['contact_person', 'Contact person', 'text'],
-                                            ['contact_number', 'Contact number (optional)', 'tel'],
-                                            ['email', 'Email (optional)', 'email'],
-                                        ].map(([key, placeholder, type]) => (
+                                        {quickMessage && <Banner tone="error">{quickMessage}</Banner>}
+
+                                        {NEW_CLIENT_FIELDS.map(([key, placeholder, type, required]) => (
                                             <div key={key}>
                                                 <input
                                                     type={type}
-                                                    placeholder={placeholder}
+                                                    placeholder={required ? `${placeholder} *` : placeholder}
+                                                    aria-label={placeholder}
+                                                    aria-invalid={Boolean(quickErrors[key])}
                                                     value={newClient[key]}
-                                                    onChange={(e) => setNewClient((p) => ({ ...p, [key]: e.target.value }))}
+                                                    onChange={(e) => {
+                                                        setNewClient((p) => ({ ...p, [key]: e.target.value }));
+                                                        clearQuickError(key);
+                                                    }}
                                                     className={input(quickErrors[key])}
                                                 />
-                                                {quickErrors[key] && <p className="mt-1 text-xs text-red-600">{quickErrors[key][0]}</p>}
+                                                {quickErrors[key] && (
+                                                    <p role="alert" className="mt-1 text-xs text-red-600">{quickErrors[key][0]}</p>
+                                                )}
                                             </div>
                                         ))}
+
                                         <div className="flex justify-end gap-2 pt-1">
                                             <Button type="button" variant="outline" onClick={toggleAddClient}>Cancel</Button>
                                             <Button type="button" variant="brand" onClick={submitNewClient} disabled={quickProcessing}>
-                                                Add client
+                                                {quickProcessing ? 'Adding…' : 'Add client'}
                                             </Button>
                                         </div>
                                     </div>
@@ -457,46 +556,32 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
 
                                 {showAddContact && (
                                     <div className={quickBox}>
-                                        <div>
-                                            <input
-                                                type="text"
-                                                placeholder="Contact person name"
-                                                value={newContact.contact_person}
-                                                onChange={(e) => setNewContact((p) => ({ ...p, contact_person: e.target.value }))}
-                                                className={input(quickErrors.contact_person)}
-                                            />
-                                            {quickErrors.contact_person && (
-                                                <p className="mt-1 text-xs text-red-600">{quickErrors.contact_person[0]}</p>
-                                            )}
-                                        </div>
-                                        <div>
-                                            <input
-                                                type="tel"
-                                                placeholder="Contact number (optional)"
-                                                value={newContact.contact_number}
-                                                onChange={(e) => setNewContact((p) => ({ ...p, contact_number: e.target.value }))}
-                                                className={input(quickErrors.contact_number)}
-                                            />
-                                            {quickErrors.contact_number && (
-                                                <p className="mt-1 text-xs text-red-600">{quickErrors.contact_number[0]}</p>
-                                            )}
-                                        </div>
-                                        <div>
-                                            <input
-                                                type="email"
-                                                placeholder="Email (optional)"
-                                                value={newContact.email}
-                                                onChange={(e) => setNewContact((p) => ({ ...p, email: e.target.value }))}
-                                                className={input(quickErrors.email)}
-                                            />
-                                            {quickErrors.email && (
-                                                <p className="mt-1 text-xs text-red-600">{quickErrors.email[0]}</p>
-                                            )}
-                                        </div>
+                                        {quickMessage && <Banner tone="error">{quickMessage}</Banner>}
+
+                                        {NEW_CONTACT_FIELDS.map(([key, placeholder, type, required]) => (
+                                            <div key={key}>
+                                                <input
+                                                    type={type}
+                                                    placeholder={required ? `${placeholder} *` : placeholder}
+                                                    aria-label={placeholder}
+                                                    aria-invalid={Boolean(quickErrors[key])}
+                                                    value={newContact[key]}
+                                                    onChange={(e) => {
+                                                        setNewContact((p) => ({ ...p, [key]: e.target.value }));
+                                                        clearQuickError(key);
+                                                    }}
+                                                    className={input(quickErrors[key])}
+                                                />
+                                                {quickErrors[key] && (
+                                                    <p role="alert" className="mt-1 text-xs text-red-600">{quickErrors[key][0]}</p>
+                                                )}
+                                            </div>
+                                        ))}
+
                                         <div className="flex justify-end gap-2 pt-1">
                                             <Button type="button" variant="outline" onClick={toggleAddContact}>Cancel</Button>
                                             <Button type="button" variant="brand" onClick={submitNewContact} disabled={quickProcessing}>
-                                                Add contact
+                                                {quickProcessing ? 'Adding…' : 'Add contact'}
                                             </Button>
                                         </div>
                                     </div>

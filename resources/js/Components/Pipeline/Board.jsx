@@ -1,5 +1,5 @@
 import { useDraggable, useDroppable } from '@dnd-kit/core';
-import { CheckCircle2, GripVertical, History, Inbox, Truck, Undo2, XCircle } from 'lucide-react';
+import { CheckCircle2, History, Inbox, Truck, Undo2, XCircle } from 'lucide-react';
 import { cx, priorityMeta } from '@/Components/ui/kit';
 
 /* Visual parts of the pipeline board. Drag/drop and move logic stays in Pages/Pipeline/Index.jsx. */
@@ -28,59 +28,18 @@ export function deliveryTotals(transaction) {
     };
 }
 
-const initials = (name) =>
-    String(name ?? '?')
-        .split(/\s+/)
-        .filter(Boolean)
-        .slice(0, 2)
-        .map((w) => w[0])
-        .join('')
-        .toUpperCase() || '?';
-
-/** Small coloured chip. */
-function Chip({ children, className }) {
-    return (
-        <span className={cx('inline-flex items-center rounded-md px-1.5 py-0.5 text-[11px] font-medium leading-none', className)}>
-            {children}
-        </span>
-    );
-}
-
-/** The documents the pipeline generated, shown as tiny chips (only when they exist). */
-function DocChips({ item }) {
-    const cpos = item.client_purchase_orders ?? [];
-    const draftPo = cpos.some((c) => c.status === 'draft');
-    if (!item.quotation_number && cpos.length === 0) return null;
-
-    return (
-        <div className="flex flex-wrap items-center gap-1">
-            {item.quotation_number && (
-                <Chip className="bg-sky-50 text-sky-700 ring-1 ring-inset ring-sky-200">{item.quotation_number}</Chip>
-            )}
-            {cpos.length > 0 && (
-                <Chip
-                    className={
-                        draftPo
-                            ? 'bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200'
-                            : 'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200'
-                    }
-                >
-                    {draftPo ? 'PO to confirm' : 'PO confirmed'}
-                </Chip>
-            )}
-        </div>
-    );
-}
-
 /**
- * Card content: name, client + contact, amount. Used on the card and on the drag overlay.
- * Priority shows as the coloured bar on the left edge; High / Critical also get a label.
+ * Card content, kept minimal: name + amount on one line, client + small tags on the next.
+ * Priority is the coloured bar on the left edge; High / Critical also get a tiny label.
+ * Used on the card and on the drag overlay.
  */
 export function CardBody({ item }) {
     const p = item.priority ? priorityMeta(item.priority) : null;
     const urgent = item.priority === 'High' || item.priority === 'Critical';
     const clientName = item.client?.client_name;
-    const contact = item.contact_person?.contact_person;
+
+    const cpos = item.client_purchase_orders ?? [];
+    const draftPo = cpos.some((c) => c.status === 'draft');
 
     return (
         <>
@@ -90,40 +49,40 @@ export function CardBody({ item }) {
                 aria-hidden="true"
             />
 
-            <div className="flex items-start justify-between gap-2">
-                <p className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-900">{item.name}</p>
-                {urgent && (
-                    <Chip
-                        className={
-                            item.priority === 'Critical'
-                                ? 'bg-red-50 text-red-700 ring-1 ring-inset ring-red-200'
-                                : 'bg-orange-50 text-orange-700 ring-1 ring-inset ring-orange-200'
-                        }
-                    >
-                        {item.priority}
-                    </Chip>
-                )}
-                {!p && item.kind && (
-                    <Chip className="bg-slate-100 uppercase text-slate-500">{item.kind === 'quotation' ? 'Quote' : 'PO'}</Chip>
-                )}
+            <div className="flex items-baseline justify-between gap-2">
+                <p className="min-w-0 flex-1 truncate text-[13px] font-medium text-slate-900">{item.name}</p>
+                <span className="shrink-0 text-[13px] font-semibold tabular-nums text-slate-900">{currency(item.total)}</span>
             </div>
 
-            <div className="mt-2 flex items-center gap-2">
-                <span
-                    className="flex size-6 shrink-0 items-center justify-center rounded-full bg-[#eef1f5] text-[10px] font-semibold text-[#667292]"
-                    aria-hidden="true"
-                >
-                    {initials(clientName)}
-                </span>
-                <div className="min-w-0 leading-tight">
-                    <p className="truncate text-xs font-medium text-slate-700">{clientName ?? 'No client'}</p>
-                    {contact && <p className="truncate text-[11px] text-slate-400">{contact}</p>}
+            <div className="mt-0.5 flex items-center justify-between gap-2 text-xs text-slate-500">
+                <p className="min-w-0 flex-1 truncate">{clientName ?? 'No client'}</p>
+
+                <div className="flex shrink-0 items-center gap-1.5">
+                    {item.quotation_number && (
+                        <span className="text-[11px] tabular-nums text-sky-700">{item.quotation_number}</span>
+                    )}
+                    {cpos.length > 0 && (
+                        <span
+                            className={cx('size-1.5 rounded-full', draftPo ? 'bg-amber-500' : 'bg-emerald-500')}
+                            title={draftPo ? 'PO to confirm' : 'PO confirmed'}
+                        />
+                    )}
+                    {urgent && (
+                        <span
+                            className={cx(
+                                'text-[10px] font-semibold uppercase tracking-wide',
+                                item.priority === 'Critical' ? 'text-red-600' : 'text-orange-600',
+                            )}
+                        >
+                            {item.priority}
+                        </span>
+                    )}
+                    {!p && item.kind && (
+                        <span className="text-[10px] font-semibold uppercase text-slate-400">
+                            {item.kind === 'quotation' ? 'Quote' : 'PO'}
+                        </span>
+                    )}
                 </div>
-            </div>
-
-            <div className="mt-2.5 flex items-center justify-between gap-2">
-                <span className="text-sm font-semibold tabular-nums text-slate-900">{currency(item.total)}</span>
-                <DocChips item={item} />
             </div>
         </>
     );
@@ -131,32 +90,26 @@ export function CardBody({ item }) {
 
 export function OverlayCard({ item }) {
     return (
-        <div className="relative w-72 rotate-1 overflow-hidden rounded-lg border border-slate-200 bg-white p-3 pl-4 shadow-xl ring-1 ring-black/5">
+        <div className="relative w-72 rotate-1 overflow-hidden rounded-md border border-slate-200 bg-white px-2.5 py-2 pl-3.5 shadow-xl ring-1 ring-black/5">
             <CardBody item={item} />
         </div>
     );
 }
 
+/** One slim line: thin bar + "2/5". */
 function DeliveryProgress({ ordered, delivered }) {
     const pct = ordered ? Math.min(100, Math.round((delivered / ordered) * 100)) : 0;
-    const state =
-        delivered <= 0
-            ? { text: 'Not delivered', cls: 'text-slate-500', bar: 'bg-slate-300' }
-            : delivered < ordered
-              ? { text: 'Partially delivered', cls: 'text-amber-700', bar: 'bg-amber-500' }
-              : { text: 'Delivered', cls: 'text-emerald-700', bar: 'bg-emerald-500' };
+    const bar = delivered <= 0 ? 'bg-slate-300' : delivered < ordered ? 'bg-amber-500' : 'bg-emerald-500';
+    const text = delivered <= 0 ? 'Not delivered' : delivered < ordered ? 'Partial' : 'Delivered';
 
     return (
-        <div className="mt-3 border-t border-slate-100 pt-2.5">
-            <div className="flex items-center justify-between text-[11px]">
-                <span className={cx('font-medium', state.cls)}>{state.text}</span>
-                <span className="tabular-nums text-slate-500">
-                    {delivered}/{ordered}
-                </span>
+        <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-500">
+            <div className="h-1 flex-1 overflow-hidden rounded-full bg-slate-100">
+                <div className={cx('h-full rounded-full transition-all', bar)} style={{ width: `${pct}%` }} />
             </div>
-            <div className="mt-1 h-1 overflow-hidden rounded-full bg-slate-100">
-                <div className={cx('h-full rounded-full transition-all', state.bar)} style={{ width: `${pct}%` }} />
-            </div>
+            <span className="shrink-0 tabular-nums">
+                {text} · {delivered}/{ordered}
+            </span>
         </div>
     );
 }
@@ -176,7 +129,7 @@ function TransactionCard({ item, showDelivery = false, canDeliver = false, onDel
     const hasHistory = (item.deliveries ?? []).length > 0;
 
     const action =
-        'flex items-center justify-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#667292]/40';
+        'flex items-center justify-center gap-1 rounded px-2 py-1 text-[11px] font-medium transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#667292]/40';
 
     return (
         <div
@@ -192,14 +145,12 @@ function TransactionCard({ item, showDelivery = false, canDeliver = false, onDel
                 if (e.key === 'Enter' && e.target === e.currentTarget) onOpen?.(item);
             }}
             className={cx(
-                'group relative touch-none cursor-grab overflow-hidden rounded-lg border border-slate-200 bg-white p-3 pl-4 shadow-sm transition',
-                'hover:-translate-y-px hover:border-slate-300 hover:shadow-md active:cursor-grabbing',
+                'relative shrink-0 touch-none cursor-grab overflow-hidden rounded-md border border-slate-200 bg-white px-2.5 py-2 pl-3.5 transition',
+                'hover:border-slate-300 hover:shadow-sm active:cursor-grabbing',
                 'focus:outline-none focus-visible:ring-2 focus-visible:ring-[#667292]/50',
                 isDragging && 'opacity-30',
             )}
         >
-            <GripVertical className="pointer-events-none absolute right-1 top-1/2 size-4 -translate-y-1/2 text-slate-300 opacity-0 transition group-hover:opacity-100" />
-
             <CardBody item={item} />
 
             {showDelivery && isTransaction && (
@@ -207,15 +158,15 @@ function TransactionCard({ item, showDelivery = false, canDeliver = false, onDel
                     <DeliveryProgress ordered={ordered} delivered={delivered} />
 
                     {(canDeliver || delivered > 0 || hasHistory) && (
-                        <div className="mt-2.5 flex gap-2">
+                        <div className="mt-1.5 flex gap-1.5">
                             {canDeliver && delivered < ordered && (
                                 <button
                                     type="button"
                                     onPointerDown={stop}
                                     onClick={() => onDeliveryAction(item, 'deliver')}
-                                    className={cx(action, 'flex-1 bg-[#667292] text-white shadow-sm hover:bg-[#3a4157]')}
+                                    className={cx(action, 'flex-1 bg-[#667292] text-white hover:bg-[#3a4157]')}
                                 >
-                                    <Truck className="size-3.5" />
+                                    <Truck className="size-3" />
                                     {delivered > 0 ? 'Deliver more' : 'Deliver'}
                                 </button>
                             )}
@@ -226,7 +177,7 @@ function TransactionCard({ item, showDelivery = false, canDeliver = false, onDel
                                     onClick={() => onDeliveryAction(item, 'return')}
                                     className={cx(action, 'flex-1 border border-slate-200 text-slate-600 hover:bg-slate-50')}
                                 >
-                                    <Undo2 className="size-3.5" />
+                                    <Undo2 className="size-3" />
                                     Return
                                 </button>
                             )}
@@ -239,7 +190,7 @@ function TransactionCard({ item, showDelivery = false, canDeliver = false, onDel
                                     title="Delivery history"
                                     className={cx(action, 'border border-slate-200 text-slate-500 hover:bg-slate-50')}
                                 >
-                                    <History className="size-3.5" />
+                                    <History className="size-3" />
                                 </button>
                             )}
                         </div>
@@ -249,7 +200,6 @@ function TransactionCard({ item, showDelivery = false, canDeliver = false, onDel
         </div>
     );
 }
-
 
 export function StageColumn({
     stage,
@@ -268,8 +218,9 @@ export function StageColumn({
         <div
             ref={setNodeRef}
             className={cx(
-                'flex w-[85vw] shrink-0 snap-start flex-col overflow-hidden rounded-xl bg-slate-50 ring-1 ring-slate-200 transition',
-                'sm:w-auto sm:min-w-[17rem] sm:flex-1 sm:shrink sm:basis-0',
+                // h-full + min-h-0 keeps the column inside the board height so the card list can scroll
+                'flex h-full min-h-0 w-[85vw] shrink-0 snap-start flex-col overflow-hidden rounded-xl bg-slate-50 ring-1 ring-slate-200 transition',
+                'sm:w-auto sm:min-w-[16rem] sm:flex-1 sm:shrink sm:basis-0',
                 isOver && 'bg-[#667292]/10 ring-2 ring-[#667292]',
                 disabled && 'opacity-40',
             )}
@@ -277,7 +228,7 @@ export function StageColumn({
             {/* thin accent line on top of every column */}
             <div className={cx('h-1 shrink-0', accent.dot)} />
 
-            <div className="shrink-0 px-3.5 pb-2 pt-3">
+            <div className="shrink-0 px-3 pb-1.5 pt-2.5">
                 <div className="flex items-center justify-between gap-2">
                     <div className="flex min-w-0 items-center gap-2">
                         <h3 className="truncate text-sm font-semibold text-slate-800">{stage.stage_name}</h3>
@@ -291,10 +242,11 @@ export function StageColumn({
                         {items.length}
                     </span>
                 </div>
-                <p className="mt-0.5 text-xs tabular-nums text-slate-400">{items.length > 0 ? currency(stageTotal) : '—'}</p>
+                <p className="text-xs tabular-nums text-slate-400">{items.length > 0 ? currency(stageTotal) : '—'}</p>
             </div>
 
-            <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-2.5 pb-2.5 [scrollbar-width:thin]">
+            {/* The card list scrolls on its own when there are many cards */}
+            <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto overscroll-contain px-2 pb-2 [scrollbar-width:thin]">
                 {items.length === 0 ? (
                     <div className="flex flex-1 flex-col items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-slate-200 py-10 text-xs text-slate-400">
                         <Inbox className="size-5" />
