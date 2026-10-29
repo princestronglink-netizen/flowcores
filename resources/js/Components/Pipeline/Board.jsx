@@ -250,6 +250,7 @@ function TransactionCard({ item, showDelivery = false, canDeliver = false, onDel
     );
 }
 
+
 export function StageColumn({
     stage,
     items = [],
