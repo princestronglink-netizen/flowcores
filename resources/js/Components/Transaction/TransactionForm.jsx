@@ -601,23 +601,17 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                         bodyClass="p-0"
                         actions={
                             !itemsLocked && (
-                                <>
-                                    <select
-                                        aria-label="Filter items by category"
-                                        value={categoryFilter}
-                                        onChange={(e) => setCategoryFilter(e.target.value)}
-                                        className={cx(inputCls, 'h-8 w-44 text-[13px]')}
-                                    >
-                                        <option value="">All categories</option>
-                                        {categories.map((c) => (
-                                            <option key={c.id} value={c.id}>{c.category_name}</option>
-                                        ))}
-                                    </select>
-                                    <Button type="button" variant="outline" onClick={addItem}>
-                                        <Plus />
-                                        Add item
-                                    </Button>
-                                </>
+                                <select
+                                    aria-label="Filter items by category"
+                                    value={categoryFilter}
+                                    onChange={(e) => setCategoryFilter(e.target.value)}
+                                    className={cx(inputCls, 'h-8 w-44 text-[13px]')}
+                                >
+                                    <option value="">All categories</option>
+                                    {categories.map((c) => (
+                                        <option key={c.id} value={c.id}>{c.category_name}</option>
+                                    ))}
+                                </select>
                             )
                         }
                     >
@@ -794,9 +788,20 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                             })}
                         </div>
 
-                        <div className="flex items-center justify-end gap-3 border-t border-slate-100 bg-slate-50 px-5 py-3 text-sm">
-                            <span className="text-slate-500">Subtotal</span>
-                            <span className="text-base font-semibold tabular-nums text-slate-900">{currency(subtotal)}</span>
+                        {/* Bottom row: Add item on the left, subtotal on the right */}
+                        <div className="flex items-center justify-between gap-3 border-t border-slate-100 bg-slate-50 px-5 py-3 text-sm">
+                            {itemsLocked ? (
+                                <span />
+                            ) : (
+                                <Button type="button" variant="outline" onClick={addItem}>
+                                    <Plus />
+                                    Add item
+                                </Button>
+                            )}
+                            <div className="flex items-center gap-3">
+                                <span className="text-slate-500">Subtotal</span>
+                                <span className="text-base font-semibold tabular-nums text-slate-900">{currency(subtotal)}</span>
+                            </div>
                         </div>
                     </Panel>
 
