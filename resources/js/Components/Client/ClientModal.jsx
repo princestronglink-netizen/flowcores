@@ -4,7 +4,6 @@ import { Button } from '@/Components/ui/Button';
 import { useForm } from '@inertiajs/react';
 import {
     Building2,
-    Hash,
     MapPin,
     UserRound,
     Mail,
@@ -24,7 +23,6 @@ const PALETTE = {
 const emptyContact = () => ({ contact_person: '', contact_number: '', email: '' });
 
 const emptyForm = () => ({
-    client_code: '',
     client_name: '',
     address: '',
     contacts: [emptyContact()],
@@ -42,7 +40,6 @@ export default function ClientModal({ show, onClose, client }) {
     useEffect(() => {
         if (show && client) {
             setData({
-                client_code: client.client_code ?? '',
                 client_name: client.client_name ?? '',
                 address: client.address ?? '',
                 contacts:
@@ -142,40 +139,21 @@ export default function ClientModal({ show, onClose, client }) {
                 </div>
 
                 <div className="mt-6 space-y-4">
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                        <div>
-                            <label htmlFor="client_code" className={labelClass} style={labelStyle}>
-                                <Hash className="h-3.5 w-3.5" />
-                                Client Code <span style={{ color: PALETTE.slate }}>*</span>
-                            </label>
-                            <input
-                                id="client_code"
-                                type="text"
-                                placeholder="e.g. ACME-001"
-                                value={data.client_code}
-                                onChange={(e) => updateField('client_code', e.target.value)}
-                                className={fieldClass}
-                                style={errors.client_code ? errorInputStyle : inputStyle}
-                            />
-                            {errors.client_code && <p className={errorClass}>{errors.client_code}</p>}
-                        </div>
-
-                        <div>
-                            <label htmlFor="client_name" className={labelClass} style={labelStyle}>
-                                <Building2 className="h-3.5 w-3.5" />
-                                Client Name <span style={{ color: PALETTE.slate }}>*</span>
-                            </label>
-                            <input
-                                id="client_name"
-                                type="text"
-                                placeholder="e.g. Acme Corp"
-                                value={data.client_name}
-                                onChange={(e) => updateField('client_name', e.target.value)}
-                                className={fieldClass}
-                                style={errors.client_name ? errorInputStyle : inputStyle}
-                            />
-                            {errors.client_name && <p className={errorClass}>{errors.client_name}</p>}
-                        </div>
+                    <div>
+                        <label htmlFor="client_name" className={labelClass} style={labelStyle}>
+                            <Building2 className="h-3.5 w-3.5" />
+                            Client Name <span style={{ color: PALETTE.slate }}>*</span>
+                        </label>
+                        <input
+                            id="client_name"
+                            type="text"
+                            placeholder="e.g. Acme Corp"
+                            value={data.client_name}
+                            onChange={(e) => updateField('client_name', e.target.value)}
+                            className={fieldClass}
+                            style={errors.client_name ? errorInputStyle : inputStyle}
+                        />
+                        {errors.client_name && <p className={errorClass}>{errors.client_name}</p>}
                     </div>
 
                     <div>

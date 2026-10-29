@@ -24,10 +24,9 @@ class ClientController extends Controller
         ];
     }
 
-    protected function clientRules(?Client $client = null): array
+    protected function clientRules(): array
     {
         return [
-            'client_code' => 'required|string|max:255|unique:clients,client_code' . ($client ? ',' . $client->id : ''),
             'client_name' => 'required|string|max:255',
             'address'     => 'nullable|string|max:500',
         ];
@@ -43,7 +42,6 @@ class ClientController extends Controller
         ]);
 
         $client = Client::create([
-            'client_code' => $validated['client_code'],
             'client_name' => $validated['client_name'],
             'address'     => $validated['address'] ?? null,
         ]);
@@ -57,7 +55,7 @@ class ClientController extends Controller
 
     public function update(Request $request, Client $client)
     {
-        $validated = $request->validate($this->clientRules($client) + [
+        $validated = $request->validate($this->clientRules() + [
             'contacts'                  => 'required|array|min:1',
             'contacts.*.contact_person' => 'required|string|max:255',
             'contacts.*.contact_number' => 'nullable|string|max:255',
@@ -65,7 +63,6 @@ class ClientController extends Controller
         ]);
 
         $client->update([
-            'client_code' => $validated['client_code'],
             'client_name' => $validated['client_name'],
             'address'     => $validated['address'] ?? null,
         ]);
@@ -91,7 +88,6 @@ class ClientController extends Controller
         $validated = $request->validate($this->clientRules() + $this->contactRules());
 
         $client = Client::create([
-            'client_code' => $validated['client_code'],
             'client_name' => $validated['client_name'],
             'address'     => $validated['address'] ?? null,
         ]);

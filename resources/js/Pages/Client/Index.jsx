@@ -54,7 +54,6 @@ export default function Index({ clients }) {
                     <Table>
                         <TableHeader>
                             <TableRow>
-                                <TableHead>Client Code</TableHead>
                                 <TableHead>Client Name</TableHead>
                                 <TableHead>Address</TableHead>
                                 <TableHead>Contact Person</TableHead>
@@ -66,7 +65,6 @@ export default function Index({ clients }) {
                         <TableBody>
                             {clients.map((client) => (
                                 <TableRow key={client.id}>
-                                    <TableCell>{client.client_code}</TableCell>
                                     <TableCell>{client.client_name}</TableCell>
                                     <TableCell className="max-w-xs truncate" title={client.address ?? ''}>
                                         {client.address || '—'}

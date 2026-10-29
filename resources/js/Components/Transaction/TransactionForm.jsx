@@ -56,7 +56,6 @@ const emptyForm = () => ({
 });
 
 const emptyNewClient = () => ({
-    client_code: '',
     client_name: '',
     address: '',
     contact_person: '',
@@ -383,12 +382,11 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                                         id="client_id"
                                         ariaLabel="Client"
                                         placeholder="Select a client"
-                                        searchPlaceholder="Type a client name or code"
+                                        searchPlaceholder="Type a client name"
                                         emptyText="No clients found"
                                         options={clientList.map((c) => ({
                                             value: c.id,
                                             label: c.client_name,
-                                            hint: c.client_code,
                                         }))}
                                         value={data.client_id}
                                         onChange={handleClientChange}
@@ -399,7 +397,6 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                                 {showAddClient && (
                                     <div className={quickBox}>
                                         {[
-                                            ['client_code', 'Client code', 'text'],
                                             ['client_name', 'Client name', 'text'],
                                             ['address', 'Address (optional)', 'text'],
                                             ['contact_person', 'Contact person', 'text'],
