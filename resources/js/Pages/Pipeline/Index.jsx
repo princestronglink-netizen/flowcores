@@ -11,6 +11,7 @@ import CardDetailModal from '@/Components/Pipeline/CardDetailModal';
 import BoardToolbar from '@/Components/Pipeline/BoardToolbar';
 import ConfirmDelete from '@/Components/ConfirmationModal/ConfirmDelete';
 import { StageColumn, DealDropZone, OverlayCard, stageAccents, deliveryTotals, cardKey } from '@/Components/Pipeline/Board';
+import { buildCompletionChecks } from '@/Components/Pipeline/completionChecks';
 import { Head, router, usePage } from '@inertiajs/react';
 import { Button } from '@/Components/ui/Button';
 import { Pencil, Plus } from 'lucide-react';
@@ -180,10 +181,17 @@ export default function Index({ pipelines = [] }) {
         if (overId === 'done' && isTx && sourceIndex !== stages.length - 1) return;
 
         if (overId === 'done' || overId === 'lost') {
-            if (overId === 'done' && isTx && deliveryIndex >= 0 && delivered < ordered) {
-                setNotice('Deliver every item in full before marking the deal as done.');
-                return;
-            }
+            // Done deals go through the completion checks first (final quotation, client PO,
+            // DR numbers + softcopies, and quotation ↔ PO ↔ delivered match).
+            // The confirm button stays disabled until every check passes.
+            const checks =
+                overId === 'done' && isTx
+                    ? buildCompletionChecks(transaction, {
+                          needQuotation: stages.some((s) => s.creates_quotation),
+                          needPo: stages.some((s) => s.creates_client_po),
+                          needDelivery: deliveryIndex >= 0,
+                      })
+                    : null;
 
             setPendingMove({
                 type: 'status',
@@ -191,6 +199,7 @@ export default function Index({ pipelines = [] }) {
                 sourceStage,
                 status: overId === 'done' ? 'won' : 'lost',
                 label: overId === 'done' ? 'Done Deal' : 'Lost Deal',
+                checks,
             });
             return;
         }
@@ -226,6 +235,10 @@ export default function Index({ pipelines = [] }) {
     // options = { restock, reason } from MoveConfirmModal; only used when a lost deal still has delivered items.
     const confirmMove = (options = {}) => {
         if (!pendingMove || isMoving) return;
+
+        // Never complete a deal while a check is failing (the modal also disables the button).
+        if (pendingMove.type === 'status' && (pendingMove.checks ?? []).some((c) => !c.ok)) return;
+
         setIsMoving(true);
 
         if (pendingMove.type === 'status') {
