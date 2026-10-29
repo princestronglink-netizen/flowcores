@@ -84,7 +84,7 @@ class TransactionController extends Controller
     {
         return [
             'items'                   => 'required|array|min:1',
-            'items.*.item_variant_id' => 'required|exists:item_variants,id',
+            'items.*.item_variant_id' => 'required|exists:item_variants,id|distinct',
             'items.*.quantity'        => 'required|integer|min:1',
             'items.*.unit_price'      => 'required|numeric|min:0',
         ];

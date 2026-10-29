@@ -4,8 +4,10 @@ import { Link, useForm, usePage } from '@inertiajs/react';
 import { Button } from '@/Components/ui/Button';
 import SearchSelect from '@/Components/ui/SearchSelect';
 import {
+    AlertTriangle,
     ArrowLeft,
     Building2,
+    ChevronDown,
     Lock,
     Package,
     Percent,
@@ -26,7 +28,6 @@ import {
     PriorityPill,
     PRIORITIES,
     Segmented,
-    SummaryLine,
     currency,
     cx,
     input,
@@ -73,6 +74,25 @@ const variantLabel = (v) => [v.unit_of_measure, v.size].filter(Boolean).join(' �
 const rowGrid = 'lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1.5fr)_84px_116px_108px_32px]';
 const mobileLabel = 'mb-1 block text-xs font-medium text-slate-500 lg:hidden';
 
+// Typed numbers only: no spinner arrows, no mouse-wheel or arrow-key changes.
+const intOnly = (v) => String(v).replace(/\D/g, '');
+const decimalOnly = (v) => {
+    const [whole, ...rest] = String(v).replace(/[^\d.]/g, '').split('.');
+    return rest.length ? `${whole}.${rest.join('').slice(0, 2)}` : whole;
+};
+
+const ADDRESS_LONG = 60;
+
+/** One line of the receipt: label on the left, value on the right, long values wrap instead of being cut off. */
+function ReceiptRow({ label, children }) {
+    return (
+        <div className="flex items-start justify-between gap-4 text-sm">
+            <dt className="shrink-0 text-slate-500">{label}</dt>
+            <dd className="min-w-0 break-words text-right font-medium text-slate-900">{children}</dd>
+        </div>
+    );
+}
+
 /**
  * itemsLocked: true once a delivery exists (or the order was deducted the old way).
  * Items and quantities are then read-only; everything else stays editable.
@@ -102,6 +122,7 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
     const [quickErrors, setQuickErrors] = useState({});
     const [quickProcessing, setQuickProcessing] = useState(false);
     const [categoryFilter, setCategoryFilter] = useState('');
+    const [showAddress, setShowAddress] = useState(false);
 
     const initialData = transaction
         ? {
@@ -141,6 +162,7 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
         () => clientList.find((c) => String(c.id) === String(data.client_id)),
         [clientList, data.client_id],
     );
+    useEffect(() => setShowAddress(false), [selectedClient?.id]);
     const contactOptions = selectedClient?.contact_people ?? [];
     const selectedContact = contactOptions.find((c) => String(c.id) === String(data.client_contact_person_id));
 
@@ -189,6 +211,29 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
             })
             .filter(Boolean);
     }, [items, catalog, itemsLocked]);
+
+    // Lines that pick the same variant (so the same item and brand too) as another line.
+    // The lines are kept and flagged, and saving is blocked until they are fixed:
+    // { lineIndex: [other line numbers] }.
+    // The same item with a different variant is fine.
+    const duplicateOf = useMemo(() => {
+        const byVariant = {};
+        items.forEach((r, i) => {
+            if (!r.item_variant_id) return;
+            const key = String(r.item_variant_id);
+            byVariant[key] = [...(byVariant[key] ?? []), i];
+        });
+
+        const out = {};
+        Object.values(byVariant).forEach((idxs) => {
+            if (idxs.length < 2) return;
+            idxs.forEach((i) => {
+                out[i] = idxs.filter((x) => x !== i).map((x) => x + 1);
+            });
+        });
+        return out;
+    }, [items]);
+    const duplicateCount = itemsLocked ? 0 : Object.keys(duplicateOf).length;
 
     // ---- form helpers ----
     const updateField = (field, value) => {
@@ -276,6 +321,8 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
 
     const submit = (e) => {
         e.preventDefault();
+        // Same item + brand + variant on two lines: stay on the form until it is fixed.
+        if (duplicateCount > 0) return;
         if (isEditing) {
             put(route('transactions.update', { transaction: transaction.id, ...(fromPipeline ? { from: 'pipeline' } : {}) }));
         } else post(route('transactions.store'));
@@ -531,9 +578,17 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                                 const over = !itemsLocked && selectedVariant && Number(item.quantity) > Number(selectedVariant.stock);
                                 const variantError = errors[`items.${index}.item_variant_id`];
                                 const lineDelivered = deliveredAt(index);
+                                const isDuplicate = !itemsLocked && Boolean(duplicateOf[index]);
 
                                 return (
-                                    <div key={index} className={cx('grid grid-cols-1 gap-3 px-5 py-3.5 lg:items-start', rowGrid)}>
+                                    <div
+                                        key={index}
+                                        className={cx(
+                                            'grid grid-cols-1 gap-3 px-5 py-3.5 lg:items-start',
+                                            rowGrid,
+                                            isDuplicate && 'bg-amber-50/70',
+                                        )}
+                                    >
                                         <div>
                                             <span className={mobileLabel}>Item</span>
                                             <SearchSelect
@@ -579,7 +634,10 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                                                 value={item.item_variant_id}
                                                 onChange={(v) => changeVariant(index, v)}
                                                 disabled={itemsLocked || !item.item_brand_id}
-                                                inputClassName={input(variantError)}
+                                                inputClassName={cx(
+                                                    input(variantError),
+                                                    isDuplicate && '!border-amber-500 !bg-amber-50 focus:!border-amber-600',
+                                                )}
                                             />
                                             {variantError && <p className="mt-1 text-xs text-red-600">Select an item, brand and variant.</p>}
                                             {itemsLocked ? (
@@ -593,16 +651,24 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                                                     </p>
                                                 )
                                             )}
+                                            {isDuplicate && (
+                                                <p className="mt-1 flex items-start gap-1 text-xs font-medium text-amber-700">
+                                                    <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
+                                                    <span>
+                                                        Same item and variant as line {duplicateOf[index].join(', ')}. Choose a different
+                                                        variant, or remove one of the lines, before saving.
+                                                    </span>
+                                                </p>
+                                            )}
                                         </div>
 
                                         <div>
                                             <span className={mobileLabel}>Qty</span>
                                             <input
-                                                type="number"
-                                                min="1"
-                                                step="1"
+                                                type="text"
+                                                inputMode="numeric"
                                                 value={item.quantity}
-                                                onChange={(e) => updateItem(index, 'quantity', e.target.value)}
+                                                onChange={(e) => updateItem(index, 'quantity', intOnly(e.target.value))}
                                                 disabled={itemsLocked}
                                                 aria-label="Quantity"
                                                 className={input(errors[`items.${index}.quantity`])}
@@ -615,12 +681,11 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                                         <div>
                                             <span className={mobileLabel}>Unit price</span>
                                             <input
-                                                type="number"
-                                                min="0"
-                                                step="0.01"
+                                                type="text"
+                                                inputMode="decimal"
                                                 placeholder="0.00"
                                                 value={item.unit_price}
-                                                onChange={(e) => updateItem(index, 'unit_price', e.target.value)}
+                                                onChange={(e) => updateItem(index, 'unit_price', decimalOnly(e.target.value))}
                                                 disabled={itemsLocked}
                                                 aria-label="Unit price"
                                                 className={input(errors[`items.${index}.unit_price`])}
@@ -662,12 +727,11 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                             <Field label="Markup (%)" htmlFor="markup_percent" error={errors.markup_percent} hint="0 for no markup.">
                                 <input
                                     id="markup_percent"
-                                    type="number"
-                                    min="0"
-                                    max="1000"
-                                    step="0.01"
+                                    type="text"
+                                    inputMode="decimal"
                                     value={data.markup_percent}
-                                    onChange={(e) => updateField('markup_percent', e.target.value)}
+                                    onChange={(e) => updateField('markup_percent', decimalOnly(e.target.value))}
+                                    onBlur={() => data.markup_percent === '' && updateField('markup_percent', '0')}
                                     className={input(errors.markup_percent)}
                                 />
                             </Field>
@@ -685,12 +749,11 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                             >
                                 <input
                                     id="vat_percent"
-                                    type="number"
-                                    min="0"
-                                    max="100"
-                                    step="0.01"
+                                    type="text"
+                                    inputMode="decimal"
                                     value={data.vat_percent}
-                                    onChange={(e) => updateField('vat_percent', e.target.value)}
+                                    onChange={(e) => updateField('vat_percent', decimalOnly(e.target.value))}
+                                    onBlur={() => data.vat_percent === '' && updateField('vat_percent', '0')}
                                     className={input(errors.vat_percent)}
                                 />
                             </Field>
@@ -777,82 +840,133 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                     </Panel>
                 </div>
 
-                {/* ---------------- Sticky summary ---------------- */}
+                {/* ---------------- Sticky summary (receipt) ---------------- */}
                 <aside className="xl:sticky xl:top-20">
-                    <Panel title={isEditing ? 'Edit transaction' : 'New transaction'} description="Review, then save.">
-                        <dl className="space-y-3">
-                            <SummaryLine label="Client">{selectedClient?.client_name ?? '—'}</SummaryLine>
-                            {selectedClient?.address && (
-                                <SummaryLine label="Address">{selectedClient.address}</SummaryLine>
-                            )}
-                            <SummaryLine label="Contact">
-                                <span className="inline-flex items-center gap-1">
-                                    {selectedContact && <UserRound className="h-3.5 w-3.5 text-slate-400" />}
-                                    {selectedContact?.contact_person ?? '—'}
-                                </span>
-                            </SummaryLine>
-                            {selectedContact?.contact_number && (
-                                <SummaryLine label="Number">{selectedContact.contact_number}</SummaryLine>
-                            )}
-                            {selectedContact?.email && (
-                                <SummaryLine label="Email">{selectedContact.email}</SummaryLine>
-                            )}
-                            <SummaryLine label="Priority">
-                                <PriorityPill value={data.priority} />
-                            </SummaryLine>
-                            <SummaryLine label="Line items">{items.length}</SummaryLine>
+                    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                        <div className="border-b border-dashed border-slate-300 px-5 py-4 text-center">
+                            <h2 className="text-sm font-semibold text-slate-900">
+                                {isEditing ? 'Edit transaction' : 'New transaction'}
+                            </h2>
+                            <p className="mt-0.5 text-xs text-slate-500">Review, then save.</p>
                             {transaction?.quotation_number && (
-                                <SummaryLine label="Quotation">{transaction.quotation_number}</SummaryLine>
+                                <p className="mt-2 text-xs font-medium tabular-nums text-slate-600">{transaction.quotation_number}</p>
                             )}
-                        </dl>
+                        </div>
 
-                        <dl className="mt-4 space-y-1.5 border-t border-slate-100 pt-4 text-sm">
-                            <div className="flex justify-between text-slate-500">
-                                <dt>Subtotal</dt>
-                                <dd className="tabular-nums text-slate-700">{currency(subtotal)}</dd>
-                            </div>
-                            {markupAmount > 0 && (
-                                <div className="flex justify-between text-slate-500">
-                                    <dt>Markup ({Number(data.markup_percent) || 0}%)</dt>
-                                    <dd className="tabular-nums text-slate-700">{currency(markupAmount)}</dd>
+                        <div className="space-y-4 px-5 py-4">
+                            {/* Client + address */}
+                            <div>
+                                <div className="flex items-start justify-between gap-4 text-sm">
+                                    <span className="text-slate-500">Client</span>
+                                    <span className="min-w-0 break-words text-right font-medium text-slate-900">
+                                        {selectedClient?.client_name ?? '—'}
+                                    </span>
                                 </div>
-                            )}
-                            <div className="flex justify-between text-slate-500">
-                                <dt>VAT ({Number(data.vat_percent) || 0}%)</dt>
-                                <dd className="tabular-nums text-slate-700">{currency(vatAmount)}</dd>
-                            </div>
-                            <div className="flex items-baseline justify-between border-t border-slate-100 pt-3">
-                                <dt className="text-sm text-slate-500">Grand total</dt>
-                                <dd className="text-2xl font-semibold tabular-nums tracking-tight text-slate-900">{currency(total)}</dd>
-                            </div>
-                        </dl>
 
-                        <div className="mt-4 space-y-2">
-                            {quotationEditable && (
-                                <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                                    Changing the client, items, markup, VAT, remarks or prepared-by keeps the current quotation in the
-                                    history and creates <b className="text-slate-900">{nextNumber}</b>. Changing only the priority or
-                                    winning message, or saving without changes, creates nothing.
-                                </p>
-                            )}
-                            {shortages.length > 0 && (
-                                <Banner tone="warning" title="Not enough stock yet">
-                                    {shortages.length} {shortages.length === 1 ? 'variant is' : 'variants are'} short. You can still save, but
-                                    you won't be able to deliver until it's restocked.
-                                </Banner>
-                            )}
-                            {hasErrors && <Banner tone="error">Fix the highlighted fields before saving.</Banner>}
-                        </div>
+                                {selectedClient?.address && (
+                                    <div className="mt-3 rounded-md bg-slate-50 px-3 py-2.5">
+                                        <div className="flex items-center justify-between">
+                                            <span className="text-xs font-medium text-slate-500">Address</span>
+                                            {selectedClient.address.length > ADDRESS_LONG && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setShowAddress((v) => !v)}
+                                                    aria-expanded={showAddress}
+                                                    className="inline-flex items-center gap-1 text-xs font-medium text-[#667292] hover:text-slate-900"
+                                                >
+                                                    {showAddress ? 'Hide' : 'See more'}
+                                                    <ChevronDown className={cx('h-3.5 w-3.5 transition-transform', showAddress && 'rotate-180')} />
+                                                </button>
+                                            )}
+                                        </div>
+                                        <p
+                                            className={cx(
+                                                'mt-1 break-words text-sm leading-relaxed text-slate-800',
+                                                !showAddress && selectedClient.address.length > ADDRESS_LONG && 'line-clamp-2',
+                                            )}
+                                        >
+                                            {selectedClient.address}
+                                        </p>
+                                    </div>
+                                )}
+                            </div>
 
-                        <div className="mt-5 flex flex-col gap-2">
-                            <Button type="submit" variant="brand" className="w-full" disabled={processing}>
-                                {processing ? 'Saving…' : isEditing ? 'Save changes' : 'Create transaction'}
-                            </Button>
-                            <Link href={listUrl} className="block">
-                                <Button type="button" variant="outline" className="w-full">Cancel</Button>
-                            </Link>
+                            {/* Contact */}
+                            <dl className="space-y-2">
+                                <ReceiptRow label="Contact">
+                                    <span className="inline-flex items-center gap-1">
+                                        {selectedContact && <UserRound className="h-3.5 w-3.5 text-slate-400" />}
+                                        {selectedContact?.contact_person ?? '—'}
+                                    </span>
+                                </ReceiptRow>
+                                {selectedContact?.contact_number && (
+                                    <ReceiptRow label="Number">{selectedContact.contact_number}</ReceiptRow>
+                                )}
+                                {selectedContact?.email && <ReceiptRow label="Email">{selectedContact.email}</ReceiptRow>}
+                            </dl>
+
+                            <dl className="space-y-2 border-t border-dashed border-slate-300 pt-4">
+                                <ReceiptRow label="Priority">
+                                    <PriorityPill value={data.priority} />
+                                </ReceiptRow>
+                                <ReceiptRow label="Line items">{items.length}</ReceiptRow>
+                            </dl>
+
+                            {/* Totals */}
+                            <dl className="space-y-1.5 border-t border-dashed border-slate-300 pt-4 text-sm">
+                                <div className="flex justify-between text-slate-500">
+                                    <dt>Subtotal</dt>
+                                    <dd className="tabular-nums text-slate-700">{currency(subtotal)}</dd>
+                                </div>
+                                {markupAmount > 0 && (
+                                    <div className="flex justify-between text-slate-500">
+                                        <dt>Markup ({Number(data.markup_percent) || 0}%)</dt>
+                                        <dd className="tabular-nums text-slate-700">{currency(markupAmount)}</dd>
+                                    </div>
+                                )}
+                                <div className="flex justify-between text-slate-500">
+                                    <dt>VAT ({Number(data.vat_percent) || 0}%)</dt>
+                                    <dd className="tabular-nums text-slate-700">{currency(vatAmount)}</dd>
+                                </div>
+                                <div className="flex items-baseline justify-between border-t border-dashed border-slate-300 pt-3">
+                                    <dt className="text-sm font-medium text-slate-700">Grand total</dt>
+                                    <dd className="text-2xl font-semibold tabular-nums tracking-tight text-slate-900">{currency(total)}</dd>
+                                </div>
+                            </dl>
+
+                            <div className="space-y-2">
+                                {quotationEditable && (
+                                    <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                                        Changing the client, items, markup, VAT, remarks or prepared-by keeps the current quotation in the
+                                        history and creates <b className="text-slate-900">{nextNumber}</b>. Changing only the priority or
+                                        winning message, or saving without changes, creates nothing.
+                                    </p>
+                                )}
+                                {shortages.length > 0 && (
+                                    <Banner tone="warning" title="Not enough stock yet">
+                                        {shortages.length} {shortages.length === 1 ? 'variant is' : 'variants are'} short. You can still save, but
+                                        you won't be able to deliver until it's restocked.
+                                    </Banner>
+                                )}
+                                {duplicateCount > 0 && (
+                                    <Banner tone="warning" icon={AlertTriangle} title="Repeated item and variant">
+                                        {duplicateCount} {duplicateCount === 1 ? 'line uses' : 'lines use'} an item and variant that is already
+                                        on this order. Change the variant or remove the repeated lines before saving.
+                                    </Banner>
+                                )}
+                                {hasErrors && <Banner tone="error">Fix the highlighted fields before saving.</Banner>}
+                            </div>
+
+                            <div className="flex flex-col gap-2 border-t border-dashed border-slate-300 pt-4">
+                                <Button type="submit" variant="brand" className="w-full" disabled={processing || duplicateCount > 0}>
+                                    {processing ? 'Saving…' : isEditing ? 'Save changes' : 'Create transaction'}
+                                </Button>
+                                <Link href={listUrl} className="block">
+                                    <Button type="button" variant="outline" className="w-full">Cancel</Button>
+                                </Link>
+                            </div>
                         </div>
-                    </Panel>
+                    </div>
                 </aside>
             </div>
         </form>
