@@ -4,6 +4,7 @@ import PageHeading from '@/Components/PageHeading';
 import StockToast from '@/Components/Pipeline/StockToast';
 import ConfirmModal from '@/Components/ConfirmationModal/ConfirmModal';
 import { Button } from '@/Components/ui/Button';
+import SearchSelect from '@/Components/ui/SearchSelect';
 import { Banner, Field, IconButton, Panel, SummaryLine, cx, input } from '@/Components/ui/kit';
 import { ADJUST_REASONS_IN, ADJUST_REASONS_OUT, reasonLabel } from '@/Components/Stock/stockReasons';
 import { Head, Link, useForm, usePage } from '@inertiajs/react';
@@ -82,6 +83,17 @@ export default function Adjust({ variants = [], recent = [], preselect = null })
     const single = Boolean(preselect) && Boolean(byId[String(preselect)]);
     const items = data.items;
     const usedIds = new Set(items.map((i) => String(i.item_variant_id)).filter(Boolean));
+
+    // Options for one row. Out of stock (when removing) and items already picked in another row are greyed out.
+    const optionsFor = (currentId) =>
+        variants.map((v) => ({
+            value: v.id,
+            label: v.label,
+            hint: `${v.stock} in stock`,
+            disabled:
+                (!isIn && v.stock <= 0) ||
+                (usedIds.has(String(v.id)) && String(v.id) !== String(currentId)),
+        }));
 
     const pickDirection = (direction) => {
         if (direction === data.direction) return;
@@ -295,39 +307,29 @@ export default function Adjust({ variants = [], recent = [], preselect = null })
                                         <Banner tone="error">{errors.items}</Banner>
                                     </div>
                                 )}
-    
+
                                 <div className="mt-4 hidden grid-cols-[minmax(0,1fr)_140px_32px] gap-3 border-y border-slate-100 bg-slate-50 px-5 py-2 text-xs font-medium text-slate-500 sm:grid">
                                     <span>Item, brand and size</span>
                                     <span>{isIn ? 'Quantity to add' : 'Quantity to remove'}</span>
                                     <span />
                                 </div>
-    
+
                                 <ul className="divide-y divide-slate-100">
                                     {lines.map(({ row, variant, qty, over }, index) => {
                                         const lineError = errors[`items.${index}.item_variant_id`] || errors[`items.${index}.quantity`];
                                         return (
                                             <li key={index} className="grid grid-cols-1 gap-3 px-5 py-3.5 sm:grid-cols-[minmax(0,1fr)_140px_32px] sm:items-start">
                                                 <div>
-                                                    <select
-                                                        aria-label="Item"
+                                                    <SearchSelect
+                                                        ariaLabel="Item"
+                                                        options={optionsFor(row.item_variant_id)}
                                                         value={row.item_variant_id}
-                                                        onChange={(e) => setLine(index, { item_variant_id: e.target.value, quantity: '' })}
-                                                        className={input(lineError && !row.item_variant_id)}
-                                                    >
-                                                        <option value="" disabled>Select an item</option>
-                                                        {variants.map((v) => (
-                                                            <option
-                                                                key={v.id}
-                                                                value={v.id}
-                                                                disabled={
-                                                                    (!isIn && v.stock <= 0) ||
-                                                                    (usedIds.has(String(v.id)) && String(v.id) !== String(row.item_variant_id))
-                                                                }
-                                                            >
-                                                                {v.label} · {v.stock} in stock
-                                                            </option>
-                                                        ))}
-                                                    </select>
+                                                        onChange={(value) => setLine(index, { item_variant_id: value, quantity: '' })}
+                                                        placeholder="Select an item"
+                                                        searchPlaceholder="Type item, brand or size"
+                                                        emptyText="No items found"
+                                                        inputClassName={input(lineError && !row.item_variant_id)}
+                                                    />
                                                     {variant && (
                                                         <p className={cx('mt-1 text-xs', over ? 'font-medium text-red-600' : 'text-slate-500')}>
                                                             {over
@@ -339,7 +341,7 @@ export default function Adjust({ variants = [], recent = [], preselect = null })
                                                     )}
                                                     {lineError && <p className="mt-1 text-xs text-red-600">{lineError}</p>}
                                                 </div>
-    
+
                                                 <div>
                                                     <input
                                                         type="number"
@@ -363,7 +365,7 @@ export default function Adjust({ variants = [], recent = [], preselect = null })
                                                         </button>
                                                     )}
                                                 </div>
-    
+
                                                 <div className="flex justify-end sm:h-9 sm:items-center">
                                                     {items.length > 1 && <IconButton icon={Trash2} label="Remove line" danger onClick={() => removeLine(index)} />}
                                                 </div>
