@@ -6,11 +6,13 @@ use App\Http\Controllers\DeliveryController;
 use App\Http\Controllers\ItemCategoryController;
 use App\Http\Controllers\ItemController;
 use App\Http\Controllers\PipelineController;
+use App\Http\Controllers\RolePermissionController;
 use App\Http\Controllers\StockAdjustController;
 use App\Http\Controllers\StockInController;
 use App\Http\Controllers\StockMovementController;
 use App\Http\Controllers\TransactionController;
 use App\Http\Controllers\TransactionQuotationController;
+use App\Http\Controllers\UserController;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
@@ -24,6 +26,7 @@ Route::middleware(['auth'])->group(function () {
     // ---- Transactions ----
     Route::resource('transactions', TransactionController::class)->except(['show']);
 
+    // Per-stage permission is checked inside updateStage() through TransactionPolicy::moveToStage.
     Route::patch('transactions/{transaction}/stage', [TransactionController::class, 'updateStage'])
         ->name('transactions.updateStage');
     Route::patch('transactions/{transaction}/status', [TransactionController::class, 'updateStatus'])
@@ -47,7 +50,7 @@ Route::middleware(['auth'])->group(function () {
     Route::patch('client-purchase-orders/{client_purchase_order}/cancel', [ClientPurchaseOrderController::class, 'cancel'])
         ->name('client-purchase-orders.cancel');
 
-    // ---- Deliveries ----
+    // ---- Deliveries (add Gate::denies('recordDelivery', $transaction) inside store() and returnItems()) ----
     Route::post('transactions/{transaction}/deliveries', [DeliveryController::class, 'store'])
         ->name('transactions.deliveries.store');
     Route::post('transactions/{transaction}/deliveries/return', [DeliveryController::class, 'returnItems'])
@@ -63,8 +66,36 @@ Route::middleware(['auth'])->group(function () {
     Route::post('categories/quick-create', [ItemCategoryController::class, 'quickStore'])
         ->name('categories.quickStore');
 
-    // ---- Pipelines / Clients ----
-    Route::resource('pipelines', PipelineController::class)->only(['index', 'store', 'update']);
+    // ---- Pipeline: every route goes through PipelinePolicy (admin always passes via Gate::before) ----
+    Route::get('pipelines', [PipelineController::class, 'index'])
+        ->middleware('can:viewAny,App\Models\Pipeline')
+        ->name('pipelines.index');
+
+    Route::post('pipelines', [PipelineController::class, 'store'])
+        ->middleware('can:create,App\Models\Pipeline')
+        ->name('pipelines.store');
+
+    Route::put('pipelines/{pipeline}', [PipelineController::class, 'update'])
+        ->middleware('can:update,pipeline')
+        ->name('pipelines.update');
+
+    // ---- Roles & permissions: admin, or any role with "Manage roles" ----
+    Route::middleware('can:roles.manage')->group(function () {
+        Route::get('roles', [RolePermissionController::class, 'index'])->name('roles.index');
+        Route::post('roles', [RolePermissionController::class, 'store'])->name('roles.store');
+        Route::put('roles/{role}', [RolePermissionController::class, 'update'])->name('roles.update');
+        Route::delete('roles/{role}', [RolePermissionController::class, 'destroy'])->name('roles.destroy');
+    });
+
+    // ---- Users: admin, or any role with "Manage users" ----
+    Route::middleware('can:users.manage')->group(function () {
+        Route::get('users', [UserController::class, 'index'])->name('users.index');
+        Route::post('users', [UserController::class, 'store'])->name('users.store');
+        Route::put('users/{user}', [UserController::class, 'update'])->name('users.update');
+        Route::delete('users/{user}', [UserController::class, 'destroy'])->name('users.destroy');
+    });
+
+    // ---- Clients ----
     Route::resource('clients', ClientController::class);
 
     // ---- Items, categories, stock ----

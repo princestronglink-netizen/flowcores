@@ -41,7 +41,17 @@ const isTransaction = (t) => !t?.kind;
 // `pipelines` defaults to [] so the page shows "No pipeline yet" instead of crashing
 // when the prop is missing (for example if another route renders this page without it).
 export default function Index({ pipelines = [] }) {
-    const { flash } = usePage().props;
+    // PERMISSION: auth is added here
+    const { flash, auth } = usePage().props;
+
+    // PERMISSION: can this user move cards INTO this stage? (admin gets every stage from the server)
+    const canMoveTo = (stage) => Boolean(stage && auth?.can?.move_stage_ids?.includes(stage.id));
+
+    // CHANGED: can this user create / edit the pipeline and its stages?
+    const canManagePipeline = Boolean(auth?.can?.manage_pipeline);
+
+    // PERMISSION: can this user see money amounts? (completion checks that compare amounts are skipped without it)
+    const canViewAmounts = Boolean(auth?.can?.view_amounts);
 
     const [isOpen, setIsOpen] = useState(false);
     const [editingPipeline, setEditingPipeline] = useState(null);
@@ -137,6 +147,8 @@ export default function Index({ pipelines = [] }) {
         if (activeIndex === -1) return true;
         if (Math.abs(index - activeIndex) > 1) return false;
         if (activeItem && !isTransaction(activeItem) && stages[index]?.deducts_stock) return false;
+        // PERMISSION: while dragging, stages the user can't move cards into are disabled
+        if (index !== activeIndex && !canMoveTo(stages[index])) return false;
         return true;
     };
     const canFinish =
@@ -190,6 +202,7 @@ export default function Index({ pipelines = [] }) {
                           needQuotation: stages.some((s) => s.creates_quotation),
                           needPo: stages.some((s) => s.creates_client_po),
                           needDelivery: deliveryIndex >= 0,
+                          checkAmounts: canViewAmounts,
                       })
                     : null;
 
@@ -211,6 +224,12 @@ export default function Index({ pipelines = [] }) {
         const targetStage = stages.find((s) => s.id === targetStageId);
         const targetIndex = stages.findIndex((s) => s.id === targetStageId);
         if (!targetStage || Math.abs(targetIndex - sourceIndex) !== 1) return;
+
+        // PERMISSION: ignore drops into a stage this user doesn't own (the server checks this again)
+        if (!canMoveTo(targetStage)) {
+            setNotice(`You don't have permission to move cards to ${targetStage.stage_name}.`);
+            return;
+        }
 
         if (!isTx && targetStage.deducts_stock) {
             setNotice('Only transactions can go to the delivery stage.');
@@ -340,6 +359,7 @@ export default function Index({ pipelines = [] }) {
                     }
                 },
                 onError: (errors) => {
+                    // The server refused (including "no permission"): put the card back and say why.
                     setPipelineList(pipelines ?? []);
                     setNotice(Object.values(errors)[0]);
                 },
@@ -357,11 +377,13 @@ export default function Index({ pipelines = [] }) {
     };
 
     const openCreate = () => {
+        if (!canManagePipeline) return; // CHANGED
         setEditingPipeline(null);
         setIsOpen(true);
     };
 
     const openEdit = (pipeline) => {
+        if (!canManagePipeline) return; // CHANGED
         setEditingPipeline(pipeline);
         setIsOpen(true);
     };
@@ -377,24 +399,30 @@ export default function Index({ pipelines = [] }) {
 
             <PageCard
                 toolbar={
-                    <PageToolbar>
-                        {selectedPipeline ? (
-                            <Button variant="brand" onClick={() => openEdit(selectedPipeline)}>
-                                <Pencil />
-                                Edit Pipeline & Stages
-                            </Button>
-                        ) : (
-                            <Button variant="brand" onClick={openCreate}>
-                                <Plus />
-                                Create pipeline
-                            </Button>
-                        )}
-                    </PageToolbar>
+                    // CHANGED: the toolbar buttons only show for users who can manage the pipeline
+                    canManagePipeline ? (
+                        <PageToolbar>
+                            {selectedPipeline ? (
+                                <Button variant="brand" onClick={() => openEdit(selectedPipeline)}>
+                                    <Pencil />
+                                    Edit Pipeline & Stages
+                                </Button>
+                            ) : (
+                                <Button variant="brand" onClick={openCreate}>
+                                    <Plus />
+                                    Create pipeline
+                                </Button>
+                            )}
+                        </PageToolbar>
+                    ) : undefined
                 }
             >
                 {pipelineList.length === 0 ? (
                     <p className="py-8 text-center text-sm text-muted-foreground">
-                        No pipeline yet. Create it to get started.
+                        {/* CHANGED: don't tell users who can't create one to "create it" */}
+                        {canManagePipeline
+                            ? 'No pipeline yet. Create it to get started.'
+                            : 'No pipeline yet. Ask an administrator to set it up.'}
                     </p>
                 ) : (
                     <div className="flex h-[calc(100dvh-13rem)] min-h-[560px] w-full min-w-0 flex-col gap-4 sm:h-[calc(100dvh-9rem)]">
@@ -434,7 +462,8 @@ export default function Index({ pipelines = [] }) {
                 )}
             </PageCard>
 
-            <PipelineModal show={isOpen} onClose={closeModal} pipeline={editingPipeline} />
+            {/* CHANGED: the modal is only mounted for users who can manage the pipeline */}
+            {canManagePipeline && <PipelineModal show={isOpen} onClose={closeModal} pipeline={editingPipeline} />}
 
             <ConfirmDelete
                 show={Boolean(deletingPipeline)}

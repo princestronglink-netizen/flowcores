@@ -10,8 +10,8 @@ use Illuminate\Support\Facades\DB;
 /**
  * The client's own order, sent after they accept a quotation.
  * Starts as a copy of the accepted quotation (or the transaction's items). The user edits it to
- * match what the client really ordered. Confirming copies the final items and amount onto the
- * transaction, so delivery and stock code keeps reading transaction_items unchanged.
+ * match what the client really ordered. Confirming copies the final items, markup, VAT and amount
+ * onto the transaction, so delivery and stock code keeps reading transaction_items unchanged.
  */
 class ClientPurchaseOrder extends Model
 {
@@ -23,13 +23,19 @@ class ClientPurchaseOrder extends Model
 
     protected $fillable = [
         'cpo_number', 'client_po_number', 'client_po_date', 'status', 'amount', 'note', 'confirmed_at',
+        'markup_percent', 'vat_percent', 'remarks', 'prepared_by', 'prepared_by_position',
         'transaction_id', 'quotation_id', 'client_id', 'client_contact_person_id', 'created_by',
     ];
 
     protected $casts = [
         'client_po_date' => 'date:Y-m-d',
         'confirmed_at'   => 'datetime',
+        'markup_percent' => 'float',
+        'vat_percent'    => 'float',
     ];
+
+    // Same breakdown fields the transaction exposes. `total` is the grand total.
+    protected $appends = ['subtotal', 'markup_amount', 'vat_amount', 'total'];
 
     protected static function booted(): void
     {
@@ -51,6 +57,26 @@ class ClientPurchaseOrder extends Model
         return $this->belongsTo(ClientContactPerson::class, 'client_contact_person_id');
     }
 
+    /* ------------------------------- Pricing ------------------------------- */
+
+    public function currentBreakdown(): array
+    {
+        $subtotal = $this->items->sum(fn ($i) => $i->quantity * $i->unit_price);
+
+        return Transaction::breakdown(
+            (float) $subtotal,
+            (float) $this->markup_percent,
+            (float) $this->vat_percent
+        );
+    }
+
+    public function getSubtotalAttribute(): float     { return $this->currentBreakdown()['subtotal']; }
+    public function getMarkupAmountAttribute(): float { return $this->currentBreakdown()['markup_amount']; }
+    public function getVatAmountAttribute(): float    { return $this->currentBreakdown()['vat_amount']; }
+    public function getTotalAttribute(): float        { return $this->currentBreakdown()['total']; }
+
+    /* -------------------------------- Rules -------------------------------- */
+
     /** Why this record can't be edited right now, or null if it can. */
     public function lockReason(): ?string
     {
@@ -71,7 +97,7 @@ class ClientPurchaseOrder extends Model
         return null;
     }
 
-    /** Copy this order's items and amount onto the transaction (replaces its items). */
+    /** Copy this order's items, markup, VAT and details onto the transaction (replaces its items). */
     public function syncToTransaction(): void
     {
         $tx    = $this->transaction()->firstOrFail();
@@ -86,7 +112,17 @@ class ClientPurchaseOrder extends Model
             'unit_price'      => $l->unit_price,
         ])->all());
 
-        $tx->update(['amount' => $lines->sum(fn ($l) => $l->quantity * $l->unit_price)]);
+        // Everything the quotation prints now follows the PO.
+        $tx->update([
+            'markup_percent'       => $this->markup_percent,
+            'vat_percent'          => $this->vat_percent,
+            'remarks'              => $this->remarks,
+            'prepared_by'          => $this->prepared_by,
+            'prepared_by_position' => $this->prepared_by_position,
+        ]);
+
+        // amount = subtotal + markup + VAT, computed in one place.
+        $tx->refresh()->syncAmount();
     }
 
     /**
@@ -143,9 +179,20 @@ class ClientPurchaseOrder extends Model
             return null;
         }
 
+        $subtotal = $lines->sum(fn ($l) => $l->quantity * $l->unit_price);
+
         $po = static::create([
             'status'                   => 'draft',
-            'amount'                   => $lines->sum(fn ($l) => $l->quantity * $l->unit_price),
+            'amount'                   => Transaction::breakdown(
+                (float) $subtotal,
+                (float) $tx->markup_percent,
+                (float) $tx->vat_percent
+            )['total'],
+            'markup_percent'           => $tx->markup_percent,
+            'vat_percent'              => $tx->vat_percent,
+            'remarks'                  => $tx->remarks,
+            'prepared_by'              => $tx->prepared_by,
+            'prepared_by_position'     => $tx->prepared_by_position,
             'note'                     => $tx->quotation_number ? "From quotation {$tx->quotation_number}" : null,
             'transaction_id'           => $tx->id,
             'client_id'                => $tx->client_id,

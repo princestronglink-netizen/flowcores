@@ -18,9 +18,11 @@ function aggregate(lines, qtyField = 'quantity') {
 
 /**
  * Returns [{ id, title, ok, summary, problems: string[], links: [{label, href}] }].
- * need = which checks apply to this pipeline (based on its stage flags).
+ * needQuotation / needPo / needDelivery = which checks apply to this pipeline (based on its stage flags).
+ * checkAmounts = false when the user can't see prices: price and amount comparisons are skipped
+ * (the prices are not in the data), quantity checks still run.
  */
-export function buildCompletionChecks(tx, { needQuotation, needPo, needDelivery }) {
+export function buildCompletionChecks(tx, { needQuotation, needPo, needDelivery, checkAmounts = true }) {
     const checks = [];
     const lines = tx.items ?? [];
     const cpos = (tx.client_purchase_orders ?? []).filter((c) => c.status !== 'cancelled');
@@ -38,9 +40,10 @@ export function buildCompletionChecks(tx, { needQuotation, needPo, needDelivery 
             ok: problems.length === 0,
             summary: tx.quotation_number ? `${tx.quotation_number}${tx.version_label ? ` · ${tx.version_label}` : ''}` : '',
             problems,
-            links: tx.quotation_number
-                ? [{ label: 'View / Print', href: route('transactions.quotation.print', tx.id) }]
-                : [],
+            links:
+                tx.quotation_number && checkAmounts
+                    ? [{ label: 'View / Print', href: route('transactions.quotation.print', tx.id) }]
+                    : [],
         });
     }
 
@@ -97,7 +100,9 @@ export function buildCompletionChecks(tx, { needQuotation, needPo, needDelivery 
                 if (!po) problems.push(`${row.name}: on the quotation but not on the PO.`);
                 else {
                     if (po.qty !== row.qty) problems.push(`${row.name}: quotation ${row.qty} vs PO ${po.qty}.`);
-                    if (money(po.price) !== money(row.price)) problems.push(`${row.name}: unit price differs (quotation ${row.price}, PO ${po.price}).`);
+                    if (checkAmounts && money(po.price) !== money(row.price)) {
+                        problems.push(`${row.name}: unit price differs (quotation ${row.price}, PO ${po.price}).`);
+                    }
                 }
             }
             if (needDelivery) {
@@ -113,13 +118,17 @@ export function buildCompletionChecks(tx, { needQuotation, needPo, needDelivery 
                 if (!q.has(key)) problems.push(`${row.name}: on the PO but not on the quotation.`);
             });
 
-            const poLinesTotal = cpos.reduce(
-                (s, c) => s + (c.items ?? []).reduce((a, i) => a + Number(i.quantity) * Number(i.unit_price), 0),
-                0
-            );
-            const poAmount = cpos.reduce((s, c) => s + Number(c.amount ?? 0), 0);
-            if (money(poLinesTotal) !== money(poAmount)) problems.push('PO amount does not equal the total of its items.');
-            if (money(poAmount) !== money(tx.subtotal)) problems.push(`PO amount (${money(poAmount)}) differs from the quotation subtotal (${money(tx.subtotal)}).`);
+            if (checkAmounts) {
+                const poLinesTotal = cpos.reduce(
+                    (s, c) => s + (c.items ?? []).reduce((a, i) => a + Number(i.quantity) * Number(i.unit_price), 0),
+                    0
+                );
+                const poAmount = cpos.reduce((s, c) => s + Number(c.amount ?? 0), 0);
+                if (money(poLinesTotal) !== money(poAmount)) problems.push('PO amount does not equal the total of its items.');
+                if (money(poAmount) !== money(tx.subtotal)) {
+                    problems.push(`PO amount (${money(poAmount)}) differs from the quotation subtotal (${money(tx.subtotal)}).`);
+                }
+            }
         }
 
         checks.push({
@@ -130,7 +139,9 @@ export function buildCompletionChecks(tx, { needQuotation, needPo, needDelivery 
                 needDelivery && 'delivered',
             ].filter(Boolean).join(' · ') + ' match',
             ok: problems.length === 0,
-            summary: problems.length === 0 ? 'Items, quantities and amounts agree.' : '',
+            summary: problems.length === 0
+                ? (checkAmounts ? 'Items, quantities and amounts agree.' : 'Items and quantities agree.')
+                : '',
             problems,
             links: [],
         });

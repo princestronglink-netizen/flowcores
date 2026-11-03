@@ -12,6 +12,7 @@ use App\Models\Transaction;
 use App\Models\TransactionVersion;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
 use Inertia\Inertia;
 
 class TransactionController extends Controller
@@ -249,6 +250,13 @@ class TransactionController extends Controller
         if ($stage->pipeline_id !== $transaction->pipeline_id) {
             return back()->withErrors([
                 'pipeline_stage_id' => 'That stage does not belong to this transaction\'s pipeline.',
+            ]);
+        }
+
+        // Permission: the user must be allowed to move cards INTO this stage.
+        if (Gate::denies('moveToStage', [$transaction, $stage])) {
+            return back()->withErrors([
+                'pipeline_stage_id' => "You don't have permission to move cards to {$stage->stage_name}.",
             ]);
         }
 

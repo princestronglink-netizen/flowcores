@@ -1,23 +1,29 @@
 import { useDraggable, useDroppable } from '@dnd-kit/core';
+import { usePage } from '@inertiajs/react';
 import { CheckCircle2, History, Inbox, Truck, Undo2, XCircle } from 'lucide-react';
 import { cx, priorityMeta } from '@/Components/ui/kit';
 
 /* Visual parts of the pipeline board. Drag/drop and move logic stays in Pages/Pipeline/Index.jsx. */
 
-// `card` is kept (empty) so older code that reads accent.card keeps working.
 export const stageAccents = [
-    { dot: 'bg-sky-500', badge: 'bg-sky-100 text-sky-700', card: '' },
-    { dot: 'bg-violet-500', badge: 'bg-violet-100 text-violet-700', card: '' },
-    { dot: 'bg-amber-500', badge: 'bg-amber-100 text-amber-700', card: '' },
-    { dot: 'bg-teal-500', badge: 'bg-teal-100 text-teal-700', card: '' },
-    { dot: 'bg-fuchsia-500', badge: 'bg-fuchsia-100 text-fuchsia-700', card: '' },
+    { dot: 'bg-sky-500', badge: 'bg-sky-100 text-sky-700' },
+    { dot: 'bg-violet-500', badge: 'bg-violet-100 text-violet-700' },
+    { dot: 'bg-amber-500', badge: 'bg-amber-100 text-amber-700' },
+    { dot: 'bg-teal-500', badge: 'bg-teal-100 text-teal-700' },
+    { dot: 'bg-fuchsia-500', badge: 'bg-fuchsia-100 text-fuchsia-700' },
 ];
 
 export const currency = (value) =>
     value == null ? '—' : Number(value).toLocaleString(undefined, { style: 'currency', currency: 'PHP' });
 
-/** Unique key per card: a quotation and a transaction can share the same id. */
-export const cardKey = (item) => `${item.kind ?? 'transaction'}-${item.id}`;
+/** Can this user do `key`? Keys come from auth.can in HandleInertiaRequests (the server enforces them again). */
+export const useCan = (key) => Boolean(usePage().props.auth?.can?.[key]);
+
+/** Can this user see prices and amounts? (The server also removes them from the data.) */
+export const useCanViewAmounts = () => useCan('view_amounts');
+
+/** Unique key per card. */
+export const cardKey = (item) => `transaction-${item.id}`;
 
 /** { ordered, delivered } across all lines of a transaction. */
 export function deliveryTotals(transaction) {
@@ -34,6 +40,7 @@ export function deliveryTotals(transaction) {
  * Used on the card and on the drag overlay.
  */
 export function CardBody({ item }) {
+    const canViewAmounts = useCanViewAmounts();
     const p = item.priority ? priorityMeta(item.priority) : null;
     const urgent = item.priority === 'High' || item.priority === 'Critical';
     const clientName = item.client?.client_name;
@@ -51,7 +58,9 @@ export function CardBody({ item }) {
 
             <div className="flex items-baseline justify-between gap-2">
                 <p className="min-w-0 flex-1 truncate text-[13px] font-medium text-slate-900">{item.name}</p>
-                <span className="shrink-0 text-[13px] font-semibold tabular-nums text-slate-900">{currency(item.total)}</span>
+                {canViewAmounts && (
+                    <span className="shrink-0 text-[13px] font-semibold tabular-nums text-slate-900">{currency(item.total)}</span>
+                )}
             </div>
 
             <div className="mt-0.5 flex items-center justify-between gap-2 text-xs text-slate-500">
@@ -75,11 +84,6 @@ export function CardBody({ item }) {
                             )}
                         >
                             {item.priority}
-                        </span>
-                    )}
-                    {!p && item.kind && (
-                        <span className="text-[10px] font-semibold uppercase text-slate-400">
-                            {item.kind === 'quotation' ? 'Quote' : 'PO'}
                         </span>
                     )}
                 </div>
@@ -118,15 +122,22 @@ function DeliveryProgress({ ordered, delivered }) {
  * showDelivery  → show progress and actions (delivery stage and every stage after it)
  * canDeliver    → only in the delivery stage itself
  * onOpen        → click on the card (not on its buttons, not after a drag) opens the detail modal
- * Delivery UI is only for transactions; quotation and PO cards never show it.
+ *
+ * The Deliver / Return buttons also need the user's delivery.record / delivery.return permission.
+ * History is read-only, so everyone who can see the board can open it.
  */
 function TransactionCard({ item, showDelivery = false, canDeliver = false, onDeliveryAction, onOpen }) {
     const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: cardKey(item) });
-    const isTransaction = !item.kind;
+
+    const mayDeliver = useCan('record_delivery');
+    const mayReturn = useCan('record_return');
 
     const { ordered, delivered } = deliveryTotals(item);
     const stop = (e) => e.stopPropagation(); // don't start a drag from the buttons
     const hasHistory = (item.deliveries ?? []).length > 0;
+
+    const showDeliver = canDeliver && mayDeliver && delivered < ordered;
+    const showReturn = mayReturn && delivered > 0;
 
     const action =
         'flex items-center justify-center gap-1 rounded px-2 py-1 text-[11px] font-medium transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#667292]/40';
@@ -153,13 +164,13 @@ function TransactionCard({ item, showDelivery = false, canDeliver = false, onDel
         >
             <CardBody item={item} />
 
-            {showDelivery && isTransaction && (
+            {showDelivery && (
                 <>
                     <DeliveryProgress ordered={ordered} delivered={delivered} />
 
-                    {(canDeliver || delivered > 0 || hasHistory) && (
+                    {(showDeliver || showReturn || hasHistory) && (
                         <div className="mt-1.5 flex gap-1.5">
-                            {canDeliver && delivered < ordered && (
+                            {showDeliver && (
                                 <button
                                     type="button"
                                     onPointerDown={stop}
@@ -170,7 +181,7 @@ function TransactionCard({ item, showDelivery = false, canDeliver = false, onDel
                                     {delivered > 0 ? 'Deliver more' : 'Deliver'}
                                 </button>
                             )}
-                            {delivered > 0 && (
+                            {showReturn && (
                                 <button
                                     type="button"
                                     onPointerDown={stop}
@@ -211,6 +222,7 @@ export function StageColumn({
     onOpen,
     emptyText = 'No cards here',
 }) {
+    const canViewAmounts = useCanViewAmounts();
     const { setNodeRef, isOver } = useDroppable({ id: `stage-${stage.id}`, disabled });
     const stageTotal = items.reduce((s, i) => s + Number(i.total ?? 0), 0);
 
@@ -242,7 +254,9 @@ export function StageColumn({
                         {items.length}
                     </span>
                 </div>
-                <p className="text-xs tabular-nums text-slate-400">{items.length > 0 ? currency(stageTotal) : '—'}</p>
+                {canViewAmounts && (
+                    <p className="text-xs tabular-nums text-slate-400">{items.length > 0 ? currency(stageTotal) : '—'}</p>
+                )}
             </div>
 
             {/* The card list scrolls on its own when there are many cards */}

@@ -3,12 +3,8 @@ import Modal from '@/Components/Modal';
 import { Link, router } from '@inertiajs/react';
 import { Button } from '@/Components/ui/Button';
 import { Check, FileText, Paperclip, Pencil, Receipt, Truck } from 'lucide-react';
-import { currency } from './Board';
+import { currency, useCanViewAmounts } from './Board';
 import { PriorityPill, cx } from '@/Components/ui/kit';
-
-const KINDS = {
-    transaction: { label: 'Transaction', Icon: Receipt },
-};
 
 /** One label + value pair. */
 function Meta({ label, children, className }) {
@@ -75,8 +71,13 @@ const itemCell = (r) => (
     </>
 );
 
+const priceCols = [
+    { key: 'price', label: 'Unit price', right: true, render: (r) => currency(r.unit_price) },
+    { key: 'sub', label: 'Subtotal', right: true, render: (r) => currency(r.quantity * r.unit_price) },
+];
+
 /** The client's purchase order: the items they ordered, with Confirm and Edit right in the pipeline. */
-function ClientPoBox({ cpo, transaction }) {
+function ClientPoBox({ cpo, transaction, canViewAmounts }) {
     const [error, setError] = useState(null);
     const [confirming, setConfirming] = useState(false);
 
@@ -152,11 +153,11 @@ function ClientPoBox({ cpo, transaction }) {
                 cols={[
                     { key: 'item', label: 'Item ordered by client', render: itemCell },
                     { key: 'qty', label: 'Qty', right: true, render: (r) => r.quantity },
-                    { key: 'price', label: 'Unit price', right: true, render: (r) => currency(r.unit_price) },
-                    { key: 'sub', label: 'Subtotal', right: true, render: (r) => currency(r.quantity * r.unit_price) },
+                    ...(canViewAmounts ? priceCols : []),
                 ]}
                 rows={cpo.items ?? []}
                 total={cpo.amount}
+                showTotal={canViewAmounts}
             />
         </div>
     );
@@ -255,11 +256,11 @@ function DeliveryBox({ item }) {
     );
 }
 
-function TransactionBody({ item, stageName }) {
+function TransactionBody({ item, stageName, canViewAmounts }) {
     const showDelivered = (item.items ?? []).some((l) => Number(l.delivered_quantity ?? 0) > 0);
-    const hasPricing = Number(item.markup_percent ?? 0) > 0 || Number(item.vat_percent ?? 0) > 0;
-    const hasDelivery =
-        (item.deliveries ?? []).length > 0 || (item.items ?? []).some((l) => Number(l.delivered_quantity ?? 0) > 0);
+    const hasPricing =
+        canViewAmounts && (Number(item.markup_percent ?? 0) > 0 || Number(item.vat_percent ?? 0) > 0);
+    const hasDelivery = (item.deliveries ?? []).length > 0 || showDelivered;
 
     const cols = [
         { key: 'item', label: 'Item', render: itemCell },
@@ -267,8 +268,7 @@ function TransactionBody({ item, stageName }) {
         ...(showDelivered
             ? [{ key: 'del', label: 'Delivered', right: true, render: (r) => Number(r.delivered_quantity ?? 0) }]
             : []),
-        { key: 'price', label: 'Unit price', right: true, render: (r) => currency(r.unit_price) },
-        { key: 'sub', label: 'Subtotal', right: true, render: (r) => currency(r.quantity * r.unit_price) },
+        ...(canViewAmounts ? priceCols : []),
     ];
 
     return (
@@ -291,7 +291,7 @@ function TransactionBody({ item, stageName }) {
             {hasDelivery && <DeliveryBox item={item} />}
 
             {(item.client_purchase_orders ?? []).map((c) => (
-                <ClientPoBox key={c.id} cpo={c} transaction={item} />
+                <ClientPoBox key={c.id} cpo={c} transaction={item} canViewAmounts={canViewAmounts} />
             ))}
 
             {/* ---------- Items ---------- */}
@@ -300,7 +300,7 @@ function TransactionBody({ item, stageName }) {
                 rows={item.items ?? []}
                 total={item.subtotal}
                 totalLabel="Subtotal"
-                showTotal={!hasPricing}
+                showTotal={canViewAmounts && !hasPricing}
             />
 
             {/* ---------- Remarks + totals ---------- */}
@@ -325,8 +325,7 @@ function TransactionBody({ item, stageName }) {
 
 /** item = a board card (a transaction). stageName = the stage it is in. */
 export default function CardDetailModal({ item, stageName, onClose }) {
-    const kind = item?.kind ?? 'transaction';
-    const { label } = KINDS[kind];
+    const canViewAmounts = useCanViewAmounts();
 
     return (
         <Modal show={Boolean(item)} onClose={onClose} maxWidth="4xl">
@@ -338,13 +337,15 @@ export default function CardDetailModal({ item, stageName, onClose }) {
                             <div className="flex min-w-0 items-center gap-5">
                                 <span className="relative shrink-0 text-[#1b4a7d]">
                                     <Receipt className="size-14" strokeWidth={1.5} />
-                                    <span className="absolute -bottom-1 -right-2 flex size-6 items-center justify-center rounded-full bg-[#4a6fa0] text-xs font-bold text-white">
-                                        ₱
-                                    </span>
+                                    {canViewAmounts && (
+                                        <span className="absolute -bottom-1 -right-2 flex size-6 items-center justify-center rounded-full bg-[#4a6fa0] text-xs font-bold text-white">
+                                            ₱
+                                        </span>
+                                    )}
                                 </span>
                                 <div className="min-w-0">
                                     <h2 className="text-3xl font-extrabold uppercase tracking-wide text-[#12306b]">
-                                        {label} slip
+                                        Transaction slip
                                     </h2>
                                     <p className="truncate text-xl text-[#6b84a8]">{stageName ?? item.name}</p>
                                 </div>
@@ -358,15 +359,19 @@ export default function CardDetailModal({ item, stageName, onClose }) {
                                         {item.version_label}
                                         {item.quotation_frozen && ' · sent'}
                                         {item.quotation_is_expired && <span className="text-red-600"> (expired)</span>}
-                                        {' · '}
-                                        <a
-                                            href={route('transactions.quotation.print', item.id)}
-                                            target="_blank"
-                                            rel="noreferrer"
-                                            className="font-medium text-[#1b4a7d] hover:underline"
-                                        >
-                                            View / Print
-                                        </a>
+                                        {canViewAmounts && (
+                                            <>
+                                                {' · '}
+                                                <a
+                                                    href={route('transactions.quotation.print', item.id)}
+                                                    target="_blank"
+                                                    rel="noreferrer"
+                                                    className="font-medium text-[#1b4a7d] hover:underline"
+                                                >
+                                                    View / Print
+                                                </a>
+                                            </>
+                                        )}
                                     </p>
                                 </div>
                             )}
@@ -376,18 +381,16 @@ export default function CardDetailModal({ item, stageName, onClose }) {
 
                         {/* ---------- Body ---------- */}
                         <div className="px-8 pb-8 pt-6">
-                            {kind === 'transaction' && <TransactionBody item={item} stageName={stageName} />}
+                            <TransactionBody item={item} stageName={stageName} canViewAmounts={canViewAmounts} />
                         </div>
                     </div>
 
                     <div className="flex flex-wrap items-center justify-end gap-2 border-t bg-muted/30 px-4 py-2">
-                        {kind === 'transaction' && (
-                            <Link href={route('transactions.edit', { transaction: item.id, from: 'pipeline' })}>
-                                <Button variant="outline">
-                                    <Pencil className="size-3.5" /> Edit
-                                </Button>
-                            </Link>
-                        )}
+                        <Link href={route('transactions.edit', { transaction: item.id, from: 'pipeline' })}>
+                            <Button variant="outline">
+                                <Pencil className="size-3.5" /> Edit
+                            </Button>
+                        </Link>
                         <Button type="button" variant="brand" onClick={onClose}>
                             Close
                         </Button>

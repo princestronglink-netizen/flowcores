@@ -6,6 +6,7 @@ use App\Exceptions\InsufficientStockException;
 use App\Models\Delivery;
 use App\Models\Transaction;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Storage;
 
 class DeliveryController extends Controller
@@ -55,6 +56,13 @@ class DeliveryController extends Controller
     /** Record a (full or partial) delivery. The card never moves because of this. */
     public function store(Request $request, Transaction $transaction)
     {
+        // Permission first: nothing is validated or stored for a user who isn't allowed.
+        if (Gate::denies('recordDelivery', $transaction)) {
+            return back()->withErrors([
+                'items' => "You don't have permission to record deliveries in this stage.",
+            ]);
+        }
+
         $validated = $request->validate($this->rules() + $this->drRules()); // DR
 
         // DR: save the softcopy on the private disk first; it is removed again if the delivery fails.
@@ -103,6 +111,13 @@ class DeliveryController extends Controller
     /** Return delivered items: restock the good ones, write off the rest, replace or reduce the order. */
     public function returnItems(Request $request, Transaction $transaction)
     {
+        // Returns are allowed from later stages too, so this checks the DELIVERY stage's permission.
+        if (Gate::denies('recordReturn', $transaction)) {
+            return back()->withErrors([
+                'items' => "You don't have permission to record returns.",
+            ]);
+        }
+
         $validated = $request->validate($this->returnRules());
 
         try {

@@ -5,6 +5,8 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Spatie\Permission\Models\Permission;
+use Spatie\Permission\PermissionRegistrar;
 
 class PipelineStage extends Model
 {
@@ -24,13 +26,52 @@ class PipelineStage extends Model
     ];
 
     protected $casts = [
-        'is_initial'             => 'boolean',
-        'is_final'               => 'boolean',
-        'deducts_stock'          => 'boolean',
-        'creates_quotation'      => 'boolean',
-        'creates_client_po'      => 'boolean',
-        'partial_return_steps'   => 'integer',
+        'is_initial'           => 'boolean',
+        'is_final'             => 'boolean',
+        'deducts_stock'        => 'boolean',
+        'creates_quotation'    => 'boolean',
+        'creates_client_po'    => 'boolean',
+        'partial_return_steps' => 'integer',
     ];
+
+    /* ---------------------------- Permissions ---------------------------- */
+
+    public static function permissionFor(string $code): string
+    {
+        return "stage.{$code}.move";
+    }
+
+    public function permissionName(): string
+    {
+        return static::permissionFor($this->stage_code);
+    }
+
+    protected static function booted(): void
+    {
+        // Every stage always has its own permission.
+        static::saved(function (PipelineStage $stage) {
+            $old = $stage->getOriginal('stage_code');
+
+            // Stage code renamed: rename the permission so roles keep it.
+            if ($old && $old !== $stage->stage_code) {
+                Permission::where('name', static::permissionFor($old))
+                    ->where('guard_name', 'web')
+                    ->update(['name' => $stage->permissionName()]);
+            }
+
+            Permission::findOrCreate($stage->permissionName(), 'web');
+            app(PermissionRegistrar::class)->forgetCachedPermissions();
+        });
+
+        static::deleted(function (PipelineStage $stage) {
+            Permission::where('name', $stage->permissionName())
+                ->where('guard_name', 'web')
+                ->delete();
+            app(PermissionRegistrar::class)->forgetCachedPermissions();
+        });
+    }
+
+    /* ----------------------------- Relations ----------------------------- */
 
     public function pipeline(): BelongsTo
     {

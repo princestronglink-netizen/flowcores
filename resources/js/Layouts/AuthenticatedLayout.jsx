@@ -14,14 +14,17 @@ import {
     PanelLeftOpen,
     Receipt,
     ScrollText,
+    ShieldCheck,
     Tags,
     User,
+    Users,
     X,
 } from 'lucide-react';
 
 const LOGO_URL = '/images/flowcore-logo.png';
 const STORAGE_KEY = 'flowcore:sidebar-collapsed';
 
+// `needs`: a key of auth.can that must be true for the link to show.
 const navGroups = [
     {
         label: 'Workspace',
@@ -30,7 +33,7 @@ const navGroups = [
             { name: 'Quotations', route: 'quotations.index', icon: FileText },
             { name: 'Client POs', route: 'client-purchase-orders.index', icon: ClipboardList },
             { name: 'Transactions', route: 'transactions.index', icon: Receipt },
-            { name: 'Pipelines', route: 'pipelines.index', icon: GitBranch },
+            { name: 'Pipelines', route: 'pipelines.index', icon: GitBranch, needs: 'view_pipeline' },
             { name: 'Clients', route: 'clients.index', icon: Building2 },
         ],
     },
@@ -43,11 +46,29 @@ const navGroups = [
             { name: 'Stock ledger', route: 'stock-movements.index', icon: ScrollText },
         ],
     },
+    {
+        label: 'Administration',
+        items: [
+            { name: 'Users', route: 'users.index', icon: Users, needs: 'manage_users' },
+            { name: 'Roles & Permissions', route: 'roles.index', icon: ShieldCheck, needs: 'manage_roles' },
+        ],
+    },
 ];
 
 const cx = (...a) => a.filter(Boolean).join(' ');
 
-function SidebarContent({ user, onNavigate, collapsed = false }) {
+/** Drop the links this user may not use, then drop groups left empty. */
+function visibleGroups(can) {
+    const allowed = (item) => !item.needs || Boolean(can?.[item.needs]);
+
+    return navGroups
+        .map((group) => ({ ...group, items: group.items.filter(allowed) }))
+        .filter((group) => group.items.length > 0);
+}
+
+function SidebarContent({ user, can, onNavigate, collapsed = false }) {
+    const groups = visibleGroups(can);
+
     return (
         <div className="flex h-full flex-col bg-[#0f1a2e] text-slate-300">
             {/* Brand */}
@@ -60,7 +81,7 @@ function SidebarContent({ user, onNavigate, collapsed = false }) {
 
             {/* Nav */}
             <nav className="flex-1 overflow-y-auto overflow-x-hidden px-3 py-4 [scrollbar-width:thin]">
-                {navGroups.map((group, gi) => (
+                {groups.map((group, gi) => (
                     <div key={group.label} className={cx(gi > 0 && 'mt-6')}>
                         {collapsed ? (
                             gi > 0 && <div className="mx-3 mb-3 h-px bg-white/10" />
@@ -143,7 +164,7 @@ function SidebarContent({ user, onNavigate, collapsed = false }) {
  * `fullWidth={false}`: padded, centered container.
  */
 export default function AuthenticatedLayout({ header, children, fullWidth = true }) {
-    const user = usePage().props.auth.user;
+    const { user, can } = usePage().props.auth;
     const [mobileOpen, setMobileOpen] = useState(false);
     const [collapsed, setCollapsed] = useState(() => {
         try {
@@ -173,7 +194,7 @@ export default function AuthenticatedLayout({ header, children, fullWidth = true
                     collapsed ? 'w-[72px]' : 'w-60',
                 )}
             >
-                <SidebarContent user={user} collapsed={collapsed} />
+                <SidebarContent user={user} can={can} collapsed={collapsed} />
             </aside>
 
             {/* Mobile drawer */}
@@ -188,7 +209,7 @@ export default function AuthenticatedLayout({ header, children, fullWidth = true
                         >
                             <X className="h-5 w-5" />
                         </button>
-                        <SidebarContent user={user} onNavigate={() => setMobileOpen(false)} />
+                        <SidebarContent user={user} can={can} onNavigate={() => setMobileOpen(false)} />
                     </div>
                 </div>
             )}

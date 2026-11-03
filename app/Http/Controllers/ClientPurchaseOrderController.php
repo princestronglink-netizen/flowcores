@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\HandlesLineItems;
 use App\Models\ClientPurchaseOrder;
+use App\Models\Transaction;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
@@ -50,6 +51,14 @@ class ClientPurchaseOrderController extends Controller
             'client_po_date'          => 'nullable|date',
             'note'                    => 'nullable|string|max:500',
             'confirm'                 => 'nullable|boolean',
+
+            // Same fields the quotation prints.
+            'markup_percent'          => 'required|numeric|min:0|max:1000',
+            'vat_percent'             => 'required|numeric|min:0|max:100',
+            'remarks'                 => 'nullable|string',
+            'prepared_by'             => 'nullable|string|max:255',
+            'prepared_by_position'    => 'nullable|string|max:255',
+
             'items'                   => 'required|array|min:1',
             'items.*.item_variant_id' => 'required|exists:item_variants,id',
             'items.*.quantity'        => 'required|integer|min:1|max:1000000',
@@ -69,11 +78,23 @@ class ClientPurchaseOrderController extends Controller
 
         try {
             DB::transaction(function () use ($v, $rows, $clientPurchaseOrder, $wantsConfirm) {
+                $subtotal = (float) collect($rows)->sum(fn ($r) => $r['quantity'] * $r['unit_price']);
+
                 $clientPurchaseOrder->update([
-                    'client_po_number' => $v['client_po_number'] ?? null,
-                    'client_po_date'   => $v['client_po_date'] ?? null,
-                    'note'             => $v['note'] ?? null,
-                    'amount'           => collect($rows)->sum(fn ($r) => $r['quantity'] * $r['unit_price']),
+                    'client_po_number'     => $v['client_po_number'] ?? null,
+                    'client_po_date'       => $v['client_po_date'] ?? null,
+                    'note'                 => $v['note'] ?? null,
+                    'markup_percent'       => $v['markup_percent'],
+                    'vat_percent'          => $v['vat_percent'],
+                    'remarks'              => $v['remarks'] ?? null,
+                    'prepared_by'          => $v['prepared_by'] ?? null,
+                    'prepared_by_position' => $v['prepared_by_position'] ?? null,
+                    // Grand total: subtotal + markup + VAT.
+                    'amount'               => Transaction::breakdown(
+                        $subtotal,
+                        (float) $v['markup_percent'],
+                        (float) $v['vat_percent'],
+                    )['total'],
                 ]);
 
                 $clientPurchaseOrder->items()->delete();
@@ -92,9 +113,9 @@ class ClientPurchaseOrderController extends Controller
         }
 
         $message = $wantsConfirm
-            ? "{$clientPurchaseOrder->cpo_number} confirmed. The transaction's items and amount now match it."
+            ? "{$clientPurchaseOrder->cpo_number} confirmed. The transaction's items, markup, VAT and amount now match it."
             : ($clientPurchaseOrder->status === 'confirmed'
-                ? "{$clientPurchaseOrder->cpo_number} saved. The transaction's items and amount were updated."
+                ? "{$clientPurchaseOrder->cpo_number} saved. The transaction's items, markup, VAT and amount were updated."
                 : "{$clientPurchaseOrder->cpo_number} saved as a draft.");
 
         // Came from the pipeline card? Go back to the board.
@@ -111,7 +132,7 @@ class ClientPurchaseOrderController extends Controller
             return back()->withErrors(['status' => $e->getMessage()]);
         }
 
-        return back()->with('stock', "{$clientPurchaseOrder->cpo_number} confirmed. The transaction's items and amount now match it.");
+        return back()->with('stock', "{$clientPurchaseOrder->cpo_number} confirmed. The transaction's items, markup, VAT and amount now match it.");
     }
 
     public function cancel(ClientPurchaseOrder $clientPurchaseOrder)
