@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useForm } from '@inertiajs/react';
+import { useForm, usePage } from '@inertiajs/react';
 import Modal from '@/Components/Modal';
 import { Button } from '@/Components/ui/Button';
 import { currency } from './Board';
@@ -214,6 +214,10 @@ function TableHead({ className, children, roomy = false }) {
  * onClose      after a successful save
  * onCancel     when the user just closes the modal (nothing happens to the transaction)
  *
+ * PERMISSION: the modal is never shown for 'deliver' without auth.can.record_delivery,
+ * or for 'return' without auth.can.record_return. 'history' is read-only and always allowed.
+ * (Index.jsx also refuses to open it; this is the safety net. The server checks again.)
+ *
  * Layout: one full-width items table, a details strip below it (DR + note), a slim summary bar.
  *
  * Return rows, per line:
@@ -226,6 +230,13 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
     const isHistory = mode === 'history';
     const isReturn = mode === 'return';
     const lines = transaction?.items ?? [];
+
+    // PERMISSION
+    const can = usePage().props.auth?.can ?? {};
+    const allowed =
+        isHistory ||
+        (isReturn && Boolean(can.record_return)) ||
+        (mode === 'deliver' && Boolean(can.record_delivery));
 
     const [step, setStep] = useState('edit'); // returns only: 'edit' → 'review'
     const reviewing = isReturn && step === 'review';
@@ -375,7 +386,7 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
     /* ---- actions ---- */
     const submit = (e) => {
         e.preventDefault();
-        if (disabled || processing) return;
+        if (!allowed || disabled || processing) return;
 
         if (isReturn && step === 'edit') {
             setStep('review');
@@ -449,8 +460,9 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
     const showForm = !isHistory && !nothingToDo;
 
     return (
-        <Modal show={Boolean(transaction)} onClose={close} maxWidth="4xl">
-            {transaction && (
+        // PERMISSION: nothing is rendered (not even a flash) when the user isn't allowed.
+        <Modal show={Boolean(transaction) && allowed} onClose={close} maxWidth="4xl">
+            {transaction && allowed && (
                 <form onSubmit={submit} className="flex max-h-[94vh] flex-col">
                     {/* ------------------------------ Header ------------------------------ */}
                     <div className="border-b border-[#dbe4ef] px-8 py-5">

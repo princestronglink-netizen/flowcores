@@ -33,6 +33,11 @@ Route::middleware(['auth'])->group(function () {
         ->name('transactions.updateStatus');
 
     // ---- Quotations: a document of the transaction (issued by the pipeline, edited in the transaction) ----
+    // Permissions are checked inside TransactionQuotationController with Gate::authorize(...):
+    //   index         -> viewQuotations (quotation.view)
+    //   print         -> printQuotation (quotation.view + amounts.view)
+    //   printVersion  -> printQuotation
+    //   restore       -> editQuotation  (quotation.edit)
     Route::get('quotations', [TransactionQuotationController::class, 'index'])->name('quotations.index');
     Route::get('transactions/{transaction}/quotation/print', [TransactionQuotationController::class, 'print'])
         ->name('transactions.quotation.print');

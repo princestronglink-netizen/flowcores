@@ -21,8 +21,10 @@ function aggregate(lines, qtyField = 'quantity') {
  * needQuotation / needPo / needDelivery = which checks apply to this pipeline (based on its stage flags).
  * checkAmounts = false when the user can't see prices: price and amount comparisons are skipped
  * (the prices are not in the data), quantity checks still run.
+ * canPrint = false when the user may not open the printable quotation (auth.can.print_quotation):
+ * the "View / Print" link is left out (the server checks this again).
  */
-export function buildCompletionChecks(tx, { needQuotation, needPo, needDelivery, checkAmounts = true }) {
+export function buildCompletionChecks(tx, { needQuotation, needPo, needDelivery, checkAmounts = true, canPrint = true }) {
     const checks = [];
     const lines = tx.items ?? [];
     const cpos = (tx.client_purchase_orders ?? []).filter((c) => c.status !== 'cancelled');
@@ -41,7 +43,7 @@ export function buildCompletionChecks(tx, { needQuotation, needPo, needDelivery,
             summary: tx.quotation_number ? `${tx.quotation_number}${tx.version_label ? ` · ${tx.version_label}` : ''}` : '',
             problems,
             links:
-                tx.quotation_number && checkAmounts
+                tx.quotation_number && checkAmounts && canPrint
                     ? [{ label: 'View / Print', href: route('transactions.quotation.print', tx.id) }]
                     : [],
         });

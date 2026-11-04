@@ -8,17 +8,31 @@ use App\Models\ClientContactPerson;
 use App\Models\ItemVariant;
 use App\Models\Quotation;
 use App\Models\QuotationVersion;
+use App\Models\Transaction;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Validation\Rule;
 use Inertia\Inertia;
 
+/**
+ * PERMISSIONS (abilities live in TransactionPolicy, checked at class level):
+ *   index         -> viewQuotations (quotation.view)
+ *   edit          -> editQuotation  (quotation.edit)
+ *   update        -> editQuotation
+ *   restore       -> editQuotation
+ *   destroy       -> deleteQuotation (quotation.delete)
+ *   print         -> printQuotation (quotation.view + amounts.view)
+ *   printVersion  -> printQuotation
+ */
 class QuotationController extends Controller
 {
     use HandlesLineItems;
 
     public function index()
     {
+        Gate::authorize('viewQuotations', Transaction::class);
+
         return Inertia::render('Quotation/Index', [
             'quotations' => Quotation::with(['client', 'contactPerson', 'items', 'transaction:id,name'])
                 ->latest()->get(),
@@ -27,6 +41,8 @@ class QuotationController extends Controller
 
     public function edit(Quotation $quotation)
     {
+        Gate::authorize('editQuotation', Transaction::class);
+
         return Inertia::render('Quotation/Edit', [
             'quotation' => $quotation->load('items.variant.brand'),
             'clients'   => Client::with('contactPeople')->orderBy('client_name')->get(),
@@ -53,6 +69,8 @@ class QuotationController extends Controller
     /** Printable / PDF-able view of the current version. */
     public function print(Quotation $quotation)
     {
+        Gate::authorize('printQuotation', Transaction::class);
+
         return Inertia::render('Quotation/Print', [
             'quotation' => $quotation->load(['client', 'contactPerson', 'items']),
         ]);
@@ -61,6 +79,8 @@ class QuotationController extends Controller
     /** Printable view of an older version, rebuilt from its stored snapshot. */
     public function printVersion(Quotation $quotation, QuotationVersion $version)
     {
+        Gate::authorize('printQuotation', Transaction::class);
+
         abort_unless($version->quotation_id === $quotation->id, 404);
 
         $s = $version->snapshot;
@@ -118,6 +138,8 @@ class QuotationController extends Controller
 
     public function update(Request $request, Quotation $quotation)
     {
+        Gate::authorize('editQuotation', Transaction::class);
+
         $v    = $request->validate($this->rules($request));
         $rows = $this->buildItemRows($v['items']);
         $id   = $quotation->id;
@@ -181,6 +203,8 @@ class QuotationController extends Controller
      */
     public function restore(Request $request, Quotation $quotation, QuotationVersion $version)
     {
+        Gate::authorize('editQuotation', Transaction::class);
+
         abort_unless($version->quotation_id === $quotation->id, 404);
 
         $s = $version->snapshot;
@@ -272,6 +296,8 @@ class QuotationController extends Controller
 
     public function destroy(Quotation $quotation)
     {
+        Gate::authorize('deleteQuotation', Transaction::class);
+
         $quotation->delete();
 
         return redirect()->route('quotations.index');

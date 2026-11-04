@@ -2,9 +2,70 @@ import { useState } from 'react';
 import Modal from '@/Components/Modal';
 import { Link, router } from '@inertiajs/react';
 import { Button } from '@/Components/ui/Button';
-import { Check, FileText, Paperclip, Pencil, Receipt, Truck } from 'lucide-react';
-import { currency, useCanViewAmounts } from './Board';
+import { AlertTriangle, Check, CheckCircle2, FileText, Paperclip, Pencil, Receipt } from 'lucide-react';
+import { currency, useCan, useCanViewAmounts } from './Board';
 import { PriorityPill, cx } from '@/Components/ui/kit';
+
+/* ------------------------------ helpers ------------------------------ */
+
+const norm = (s) => String(s ?? '').trim().toLowerCase();
+const keyOf = (l) => `${norm(l.item_name)}|${norm(l.brand_name)}`; // same key as completionChecks.js
+const num = (v) => Number(v ?? 0);
+const money = (n) => Math.round(num(n) * 100) / 100;
+
+/**
+ * One row per item + brand, merging the quotation lines, the client PO lines and the deliveries.
+ * Each row also carries its own list of problems, so nothing has to be compared by eye.
+ */
+function buildRows({ item, cpos, canViewAmounts }) {
+    const map = new Map();
+    const get = (l) => {
+        const k = keyOf(l);
+        if (!map.has(k)) {
+            map.set(k, {
+                key: k, name: l.item_name, brand: l.brand_name,
+                qQty: 0, qAmt: 0, pQty: 0, pAmt: 0, delivered: 0, inQuote: false, inPo: false,
+            });
+        }
+        return map.get(k);
+    };
+
+    (item.items ?? []).forEach((l) => {
+        const r = get(l);
+        r.inQuote = true;
+        r.qQty += num(l.quantity);
+        r.qAmt += num(l.quantity) * num(l.unit_price);
+        r.delivered += num(l.delivered_quantity);
+    });
+
+    cpos.forEach((c) =>
+        (c.items ?? []).forEach((l) => {
+            const r = get(l);
+            r.inPo = true;
+            r.pQty += num(l.quantity);
+            r.pAmt += num(l.quantity) * num(l.unit_price);
+        }),
+    );
+
+    const hasPo = cpos.length > 0;
+
+    return [...map.values()].map((r) => {
+        const qPrice = r.qQty ? r.qAmt / r.qQty : 0;
+        const pPrice = r.pQty ? r.pAmt / r.pQty : 0;
+        const target = hasPo && r.inPo ? r.pQty : r.qQty; // what should end up delivered
+        const problems = [];
+
+        if (hasPo && !r.inPo) problems.push('Not on PO');
+        if (hasPo && !r.inQuote) problems.push('Not on quotation');
+        if (hasPo && r.inPo && r.inQuote && r.pQty !== r.qQty) problems.push('Qty differs');
+        if (canViewAmounts && hasPo && r.inPo && r.inQuote && money(pPrice) !== money(qPrice)) problems.push('Price differs');
+        if (r.delivered > target) problems.push('Over-delivered');
+
+        return { ...r, qPrice, pPrice, target, balance: target - r.delivered, problems };
+    });
+}
+
+/* ------------------------------ parts ------------------------------ */
 
 /** One label + value pair. */
 function Meta({ label, children, className }) {
@@ -17,75 +78,27 @@ function Meta({ label, children, className }) {
     );
 }
 
-/** Items table: light header, thin dividers. */
-function Lines({ cols, rows, total, totalLabel = 'Total', showTotal = true }) {
-    return (
-        <div className="overflow-x-auto rounded-xl border border-[#dbe4ef] bg-white">
-            <table className="w-full text-sm">
-                <thead>
-                    <tr className="bg-[#eef3fa] text-xs font-semibold uppercase tracking-wide text-slate-600">
-                        {cols.map((c) => (
-                            <th key={c.key} className={cx('px-6 py-3', c.right ? 'text-right' : 'text-left')}>
-                                {c.label}
-                            </th>
-                        ))}
-                    </tr>
-                </thead>
-                <tbody className="divide-y divide-[#e6edf5]">
-                    {rows.length === 0 && (
-                        <tr>
-                            <td colSpan={cols.length} className="px-6 py-4 text-center text-xs text-slate-500">
-                                No items.
-                            </td>
-                        </tr>
-                    )}
-                    {rows.map((r, i) => (
-                        <tr key={r.id ?? i}>
-                            {cols.map((c) => (
-                                <td key={c.key} className={cx('px-6 py-3.5 text-base', c.right && 'text-right tabular-nums')}>
-                                    {c.render(r)}
-                                </td>
-                            ))}
-                        </tr>
-                    ))}
-                </tbody>
-                {showTotal && (
-                    <tfoot>
-                        <tr className="border-t border-[#dbe4ef] bg-[#f6f9fc]">
-                            <td colSpan={cols.length - 1} className="px-6 py-2.5 text-right text-xs font-medium text-slate-500">
-                                {totalLabel}
-                            </td>
-                            <td className="px-6 py-2.5 text-right font-semibold tabular-nums">{currency(total)}</td>
-                        </tr>
-                    </tfoot>
-                )}
-            </table>
-        </div>
-    );
-}
-
-const itemCell = (r) => (
-    <>
-        <span className="font-medium text-slate-900">{r.item_name}</span>
-        {r.brand_name && <span className="text-[#6b84a8]"> — {r.brand_name}</span>}
-    </>
-);
-
-const priceCols = [
-    { key: 'price', label: 'Unit price', right: true, render: (r) => currency(r.unit_price) },
-    { key: 'sub', label: 'Subtotal', right: true, render: (r) => currency(r.quantity * r.unit_price) },
-];
-
-/** The client's purchase order: the items they ordered, with Confirm and Edit right in the pipeline. */
-function ClientPoBox({ cpo, transaction, canViewAmounts }) {
+/**
+ * Slim strip per client PO: number, status, client PO no., Confirm / Edit. The items live in the table below.
+ *
+ * PERMISSION (the server checks these again):
+ *   auth.can.confirm_client_po (client_po.confirm) -> Confirm button
+ *   auth.can.edit_client_po    (client_po.edit)    -> Edit button
+ */
+function ClientPoStrip({ cpo, transaction }) {
     const [error, setError] = useState(null);
     const [confirming, setConfirming] = useState(false);
+
+    const canConfirm = useCan('confirm_client_po');
+    const canEditPo = useCan('edit_client_po');
 
     const delivered = (transaction.deliveries ?? []).length > 0;
     const canEdit = cpo.status !== 'cancelled' && !delivered;
     const missingPoNumber = !String(cpo.client_po_number ?? '').trim();
 
     const confirm = () => {
+        if (!canConfirm) return;
+
         // Same rule the server enforces, checked first so the user gets a clear message.
         if (missingPoNumber) {
             setError("Enter the client's PO number first (use Edit), then confirm.");
@@ -106,7 +119,7 @@ function ClientPoBox({ cpo, transaction, canViewAmounts }) {
     };
 
     return (
-        <div className="space-y-2 rounded-xl bg-white p-3 ring-1 ring-[#dbe4ef]">
+        <div className="space-y-2 rounded-xl bg-white px-4 py-3 ring-1 ring-[#dbe4ef]">
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
                 <div className="min-w-0 text-sm text-[#12306b]">
                     <p className="truncate">
@@ -121,7 +134,7 @@ function ClientPoBox({ cpo, transaction, canViewAmounts }) {
                 </div>
 
                 <div className="flex shrink-0 gap-2">
-                    {cpo.status === 'draft' && (
+                    {cpo.status === 'draft' && canConfirm && (
                         <Button
                             type="button"
                             variant="brand"
@@ -133,7 +146,7 @@ function ClientPoBox({ cpo, transaction, canViewAmounts }) {
                             <Check className="size-3.5" /> {confirming ? 'Confirming…' : 'Confirm'}
                         </Button>
                     )}
-                    {canEdit && (
+                    {canEdit && canEditPo && (
                         <Link href={route('client-purchase-orders.edit', { client_purchase_order: cpo.id, from: 'pipeline' })}>
                             <Button type="button" variant="outline">
                                 <Pencil className="size-3.5" /> Edit
@@ -148,25 +161,14 @@ function ClientPoBox({ cpo, transaction, canViewAmounts }) {
                     {error}
                 </p>
             )}
-
-            <Lines
-                cols={[
-                    { key: 'item', label: 'Item ordered by client', render: itemCell },
-                    { key: 'qty', label: 'Qty', right: true, render: (r) => r.quantity },
-                    ...(canViewAmounts ? priceCols : []),
-                ]}
-                rows={cpo.items ?? []}
-                total={cpo.amount}
-                showTotal={canViewAmounts}
-            />
         </div>
     );
 }
 
 /** Subtotal → markup → VAT, a divider, then the Grand total. Hidden when neither markup nor VAT applies. */
 function PricingSummary({ item }) {
-    const markup = Number(item.markup_percent ?? 0);
-    const vat = Number(item.vat_percent ?? 0);
+    const markup = num(item.markup_percent);
+    const vat = num(item.vat_percent);
     if (markup <= 0 && vat <= 0) return null;
 
     return (
@@ -195,81 +197,206 @@ function PricingSummary({ item }) {
     );
 }
 
-/** Delivery progress + the delivery receipts (DR number and file) of this transaction. */
-function DeliveryBox({ item }) {
-    const lines = item.items ?? [];
-    const ordered = lines.reduce((s, l) => s + Number(l.quantity ?? 0), 0);
-    const delivered = lines.reduce((s, l) => s + Number(l.delivered_quantity ?? 0), 0);
-    const deliveries = (item.deliveries ?? []).filter((d) => !d.is_return);
-    const withDr = deliveries.filter((d) => d.dr_number || d.dr_file_url);
+/**
+ * THE cross-check table: quotation ↔ client PO ↔ delivered, one row per item.
+ * Columns appear only when they apply (PO column only when a PO exists, etc.).
+ */
+function CrossCheckTable({ item, cpos, canViewAmounts }) {
+    const hasPo = cpos.length > 0;
+    const hasDelivery = (item.deliveries ?? []).length > 0 || (item.items ?? []).some((l) => num(l.delivered_quantity) > 0);
 
-    if (delivered <= 0 && deliveries.length === 0) return null;
+    const rows = buildRows({ item, cpos, canViewAmounts });
+    const issues = rows.filter((r) => r.problems.length > 0).length;
 
-    const pct = ordered ? Math.min(100, Math.round((delivered / ordered) * 100)) : 0;
+    const th = (right) => cx('whitespace-nowrap px-4 py-3', right ? 'text-right' : 'text-left');
+    const td = (right) => cx('px-4 py-3 text-sm', right && 'text-right tabular-nums');
+
+    const tot = rows.reduce(
+        (s, r) => ({ q: s.q + r.qQty, p: s.p + r.pQty, d: s.d + r.delivered, b: s.b + Math.max(0, r.balance) }),
+        { q: 0, p: 0, d: 0, b: 0 },
+    );
+    const poAmount = cpos.reduce((s, c) => s + num(c.amount), 0);
+
+    // Number of columns before the "Check" column, for the footer label.
+    const leadCols =
+        1 + 1 + (hasPo ? 1 : 0) + (hasDelivery ? 2 : 0) + (canViewAmounts ? (hasPo ? 2 : 1) + 1 : 0);
+
+    return (
+        <div className="space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-sm font-bold uppercase tracking-[0.15em] text-[#12306b]">
+                    Quotation{hasPo && ' · PO'}{hasDelivery && ' · Delivery'}
+                </h3>
+                {rows.length > 0 && (
+                    <span
+                        className={cx(
+                            'inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium',
+                            issues > 0 ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700',
+                        )}
+                    >
+                        {issues > 0 ? <AlertTriangle className="size-3" /> : <CheckCircle2 className="size-3" />}
+                        {issues > 0 ? `${issues} ${issues === 1 ? 'item needs' : 'items need'} checking` : 'Everything matches'}
+                    </span>
+                )}
+            </div>
+
+            <div className="overflow-x-auto rounded-xl border border-[#dbe4ef] bg-white">
+                <table className="w-full text-sm">
+                    <thead>
+                        <tr className="bg-[#eef3fa] text-xs font-semibold uppercase tracking-wide text-slate-600">
+                            <th className={th(false)}>Item</th>
+                            <th className={th(true)}>Quotation qty</th>
+                            {hasPo && <th className={th(true)}>PO qty</th>}
+                            {hasDelivery && <th className={th(true)}>Delivered</th>}
+                            {hasDelivery && <th className={th(true)}>Balance</th>}
+                            {canViewAmounts && <th className={th(true)}>Quotation price</th>}
+                            {canViewAmounts && hasPo && <th className={th(true)}>PO price</th>}
+                            {canViewAmounts && <th className={th(true)}>Subtotal</th>}
+                            <th className={th(false)}>Check</th>
+                        </tr>
+                    </thead>
+
+                    <tbody className="divide-y divide-[#e6edf5]">
+                        {rows.length === 0 && (
+                            <tr>
+                                <td colSpan={leadCols + 1} className="px-4 py-4 text-center text-xs text-slate-500">
+                                    No items.
+                                </td>
+                            </tr>
+                        )}
+
+                        {rows.map((r) => {
+                            const qtyDiff = hasPo && r.inPo && r.inQuote && r.pQty !== r.qQty;
+                            const priceDiff = canViewAmounts && hasPo && r.inPo && r.inQuote && money(r.pPrice) !== money(r.qPrice);
+                            const over = r.delivered > r.target;
+                            const complete = r.delivered > 0 && r.delivered === r.target;
+                            const bad = 'font-semibold text-amber-700';
+
+                            return (
+                                <tr key={r.key} className={r.problems.length > 0 ? 'bg-amber-50/40' : undefined}>
+                                    <td className={td(false)}>
+                                        <span className="font-medium text-slate-900">{r.name}</span>
+                                        {r.brand && <span className="text-[#6b84a8]"> — {r.brand}</span>}
+                                    </td>
+
+                                    <td className={cx(td(true), !r.inQuote && 'text-slate-400')}>{r.inQuote ? r.qQty : '—'}</td>
+
+                                    {hasPo && (
+                                        <td className={cx(td(true), qtyDiff || !r.inPo ? bad : '')}>{r.inPo ? r.pQty : '—'}</td>
+                                    )}
+
+                                    {hasDelivery && (
+                                        <td
+                                            className={cx(
+                                                td(true),
+                                                over ? 'font-semibold text-red-700' : complete ? 'font-medium text-emerald-700' : '',
+                                            )}
+                                        >
+                                            {r.delivered}
+                                        </td>
+                                    )}
+                                    {hasDelivery && (
+                                        <td className={cx(td(true), r.balance > 0 ? 'text-slate-700' : 'text-slate-400')}>
+                                            {Math.max(0, r.balance)}
+                                        </td>
+                                    )}
+
+                                    {canViewAmounts && <td className={td(true)}>{r.inQuote ? currency(r.qPrice) : '—'}</td>}
+                                    {canViewAmounts && hasPo && (
+                                        <td className={cx(td(true), priceDiff ? bad : '')}>{r.inPo ? currency(r.pPrice) : '—'}</td>
+                                    )}
+                                    {canViewAmounts && <td className={td(true)}>{r.inQuote ? currency(r.qAmt) : '—'}</td>}
+
+                                    <td className={td(false)}>
+                                        {r.problems.length === 0 ? (
+                                            <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700">
+                                                <CheckCircle2 className="size-3.5" /> OK
+                                            </span>
+                                        ) : (
+                                            <span className="inline-flex items-start gap-1 text-xs font-medium text-amber-700">
+                                                <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+                                                {r.problems.join(' · ')}
+                                            </span>
+                                        )}
+                                    </td>
+                                </tr>
+                            );
+                        })}
+                    </tbody>
+
+                    {rows.length > 0 && (
+                        <tfoot>
+                            <tr className="border-t border-[#dbe4ef] bg-[#f6f9fc] text-sm font-semibold">
+                                <td className="px-4 py-2.5 text-xs font-medium text-slate-500">Total</td>
+                                <td className="px-4 py-2.5 text-right tabular-nums">{tot.q}</td>
+                                {hasPo && <td className="px-4 py-2.5 text-right tabular-nums">{tot.p}</td>}
+                                {hasDelivery && <td className="px-4 py-2.5 text-right tabular-nums">{tot.d}</td>}
+                                {hasDelivery && <td className="px-4 py-2.5 text-right tabular-nums">{tot.b}</td>}
+                                {canViewAmounts && <td className="px-4 py-2.5" />}
+                                {canViewAmounts && hasPo && (
+                                    <td className="px-4 py-2.5 text-right tabular-nums" title="Total of the client PO(s)">
+                                        {currency(poAmount)}
+                                    </td>
+                                )}
+                                {canViewAmounts && (
+                                    <td className="px-4 py-2.5 text-right tabular-nums" title="Quotation subtotal">
+                                        {currency(item.subtotal)}
+                                    </td>
+                                )}
+                                <td className="px-4 py-2.5" />
+                            </tr>
+                        </tfoot>
+                    )}
+                </table>
+            </div>
+        </div>
+    );
+}
+
+/** Delivery receipts only (DR number + file). Quantities are already in the table above. */
+function DeliveryReceipts({ item }) {
+    const withDr = (item.deliveries ?? []).filter((d) => !d.is_return && (d.dr_number || d.dr_file_url));
+    if (withDr.length === 0) return null;
 
     return (
         <div className="rounded-xl bg-[#eef3fa] px-4 py-3 text-sm text-[#12306b]">
-            <div className="flex items-center justify-between text-xs">
-                <span className="inline-flex items-center gap-1.5 font-medium text-[#6b84a8]">
-                    <Truck className="size-3.5" /> Delivery
-                </span>
-                <span className="tabular-nums text-[#6b84a8]">
-                    {delivered}/{ordered} ({pct}%)
-                </span>
-            </div>
-            <div className="mt-1 h-1 overflow-hidden rounded-full bg-white">
-                <div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${pct}%` }} />
-            </div>
-
-            {withDr.length > 0 && (
-                <ul className="mt-1 divide-y divide-white/70">
-                    {withDr.map((d) => (
-                        <li key={d.id} className="flex flex-wrap items-center justify-between gap-x-3 py-1 text-xs">
-                            <span className="inline-flex items-center gap-1.5">
-                                <FileText className="size-3.5 text-[#6b84a8]" />
-                                {d.dr_number ? (
-                                    <>
-                                        DR <b>{d.dr_number}</b>
-                                    </>
-                                ) : (
-                                    'Delivery receipt'
-                                )}
-                            </span>
-                            {d.dr_file_url ? (
-                                <a
-                                    href={d.dr_file_url}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="inline-flex max-w-[14rem] items-center gap-1 font-medium text-[#6b84a8] hover:underline"
-                                >
-                                    <Paperclip className="size-3 shrink-0" />
-                                    <span className="truncate">{d.dr_file_name ?? 'View DR'}</span>
-                                </a>
+            <p className="text-xs font-semibold uppercase tracking-wider text-[#6b84a8]">Delivery receipts</p>
+            <ul className="mt-1 divide-y divide-white/70">
+                {withDr.map((d) => (
+                    <li key={d.id} className="flex flex-wrap items-center justify-between gap-x-3 py-1 text-xs">
+                        <span className="inline-flex items-center gap-1.5">
+                            <FileText className="size-3.5 text-[#6b84a8]" />
+                            {d.dr_number ? (
+                                <>
+                                    DR <b>{d.dr_number}</b>
+                                </>
                             ) : (
-                                <span className="text-slate-500">no file</span>
+                                'Delivery receipt'
                             )}
-                        </li>
-                    ))}
-                </ul>
-            )}
+                        </span>
+                        {d.dr_file_url ? (
+                            <a
+                                href={d.dr_file_url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex max-w-[14rem] items-center gap-1 font-medium text-[#6b84a8] hover:underline"
+                            >
+                                <Paperclip className="size-3 shrink-0" />
+                                <span className="truncate">{d.dr_file_name ?? 'View DR'}</span>
+                            </a>
+                        ) : (
+                            <span className="text-slate-500">no file</span>
+                        )}
+                    </li>
+                ))}
+            </ul>
         </div>
     );
 }
 
 function TransactionBody({ item, stageName, canViewAmounts }) {
-    const showDelivered = (item.items ?? []).some((l) => Number(l.delivered_quantity ?? 0) > 0);
-    const hasPricing =
-        canViewAmounts && (Number(item.markup_percent ?? 0) > 0 || Number(item.vat_percent ?? 0) > 0);
-    const hasDelivery = (item.deliveries ?? []).length > 0 || showDelivered;
-
-    const cols = [
-        { key: 'item', label: 'Item', render: itemCell },
-        { key: 'qty', label: 'Qty', right: true, render: (r) => r.quantity },
-        ...(showDelivered
-            ? [{ key: 'del', label: 'Delivered', right: true, render: (r) => Number(r.delivered_quantity ?? 0) }]
-            : []),
-        ...(canViewAmounts ? priceCols : []),
-    ];
+    const cpos = (item.client_purchase_orders ?? []).filter((c) => c.status !== 'cancelled');
+    const hasPricing = canViewAmounts && (num(item.markup_percent) > 0 || num(item.vat_percent) > 0);
 
     return (
         <div className="space-y-6">
@@ -288,20 +415,15 @@ function TransactionBody({ item, stageName, canViewAmounts }) {
                 <Meta label="Priority">{item.priority ? <PriorityPill value={item.priority} /> : null}</Meta>
             </dl>
 
-            {hasDelivery && <DeliveryBox item={item} />}
-
+            {/* ---------- Client PO actions (Confirm / Edit), no table ---------- */}
             {(item.client_purchase_orders ?? []).map((c) => (
-                <ClientPoBox key={c.id} cpo={c} transaction={item} canViewAmounts={canViewAmounts} />
+                <ClientPoStrip key={c.id} cpo={c} transaction={item} />
             ))}
 
-            {/* ---------- Items ---------- */}
-            <Lines
-                cols={cols}
-                rows={item.items ?? []}
-                total={item.subtotal}
-                totalLabel="Subtotal"
-                showTotal={canViewAmounts && !hasPricing}
-            />
+            {/* ---------- The one table ---------- */}
+            <CrossCheckTable item={item} cpos={cpos} canViewAmounts={canViewAmounts} />
+
+            <DeliveryReceipts item={item} />
 
             {/* ---------- Remarks + totals ---------- */}
             {(item.remarks || hasPricing) && (
@@ -326,6 +448,12 @@ function TransactionBody({ item, stageName, canViewAmounts }) {
 /** item = a board card (a transaction). stageName = the stage it is in. */
 export default function CardDetailModal({ item, stageName, onClose }) {
     const canViewAmounts = useCanViewAmounts();
+
+    // PERMISSION: auth.can.print_quotation = quotation.view + amounts.view (the server checks this again)
+    const canPrintQuotation = useCan('print_quotation');
+
+    // PERMISSION: auth.can.edit_transaction = transaction.edit (the server checks this again)
+    const canEditTransaction = useCan('edit_transaction');
 
     return (
         <Modal show={Boolean(item)} onClose={onClose} maxWidth="4xl">
@@ -359,7 +487,7 @@ export default function CardDetailModal({ item, stageName, onClose }) {
                                         {item.version_label}
                                         {item.quotation_frozen && ' · sent'}
                                         {item.quotation_is_expired && <span className="text-red-600"> (expired)</span>}
-                                        {canViewAmounts && (
+                                        {canPrintQuotation && (
                                             <>
                                                 {' · '}
                                                 <a
@@ -386,11 +514,13 @@ export default function CardDetailModal({ item, stageName, onClose }) {
                     </div>
 
                     <div className="flex flex-wrap items-center justify-end gap-2 border-t bg-muted/30 px-4 py-2">
-                        <Link href={route('transactions.edit', { transaction: item.id, from: 'pipeline' })}>
-                            <Button variant="outline">
-                                <Pencil className="size-3.5" /> Edit
-                            </Button>
-                        </Link>
+                        {canEditTransaction && (
+                            <Link href={route('transactions.edit', { transaction: item.id, from: 'pipeline' })}>
+                                <Button variant="outline">
+                                    <Pencil className="size-3.5" /> Edit
+                                </Button>
+                            </Link>
+                        )}
                         <Button type="button" variant="brand" onClick={onClose}>
                             Close
                         </Button>

@@ -16,10 +16,16 @@ class ItemVariant extends Model
     /** Rolling window (in days) used to measure demand. */
     public const DEMAND_DAYS = 30;
 
+    /** Days between placing a supplier order and receiving it. Adjust to your reality. */
+    public const LEAD_TIME_DAYS = 7;
+
+    /** Extra days of cover as a buffer against demand spikes or late deliveries. */
+    public const SAFETY_STOCK_DAYS = 3;
+
     protected $fillable = ['item_brand_id', 'unit_of_measure', 'size', 'stock'];
 
     /** Sent to the frontend with every variant, so badges need no extra queries. */
-    protected $appends = ['stock_status', 'demand', 'moq'];
+    protected $appends = ['stock_status', 'demand', 'avg_daily_demand', 'reorder_point'];
 
     public function brand(): BelongsTo
     {
@@ -57,13 +63,24 @@ class ItemVariant extends Model
         return max(0, (int) ($this->attributes['demand'] ?? 0));
     }
 
-    /** MOQ = the 30-day demand. */
-    public function getMoqAttribute(): int
+    /** Average units ordered per day over the demand window. */
+    public function getAvgDailyDemandAttribute(): float
     {
-        return $this->demand;
+        return round($this->demand / self::DEMAND_DAYS, 2);
     }
 
-    /** out = 0 units · low = stock is below the 30-day demand · ok = otherwise. */
+    /**
+     * Reorder point = average daily demand × (lead time + safety stock days).
+     * Rounded up so we never under-order. 0 when there is no recent demand.
+     */
+    public function getReorderPointAttribute(): int
+    {
+        return (int) ceil(
+            ($this->demand / self::DEMAND_DAYS) * (self::LEAD_TIME_DAYS + self::SAFETY_STOCK_DAYS)
+        );
+    }
+
+    /** out = 0 units · low = at or below the reorder point · ok = otherwise. */
     public function getStockStatusAttribute(): string
     {
         $stock = (int) $this->stock;
@@ -72,7 +89,7 @@ class ItemVariant extends Model
             return self::STATUS_OUT;
         }
 
-        return $stock < $this->moq ? self::STATUS_LOW : self::STATUS_OK;
+        return $stock <= $this->reorder_point ? self::STATUS_LOW : self::STATUS_OK;
     }
 
     /**

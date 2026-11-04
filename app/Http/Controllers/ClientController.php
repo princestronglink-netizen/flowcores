@@ -4,12 +4,22 @@ namespace App\Http\Controllers;
 
 use App\Models\Client;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Gate;
 use Inertia\Inertia;
 
+/**
+ * PERMISSIONS (ClientPolicy):
+ *   index                 -> viewAny (client.view)
+ *   store, quickStore     -> create  (client.create)
+ *   update, quickStoreContact -> update (client.edit)
+ *   destroy               -> delete  (client.delete)
+ */
 class ClientController extends Controller
 {
     public function index()
     {
+        Gate::authorize('viewAny', Client::class);
+
         return Inertia::render('Client/Index', [
             'clients' => Client::with('contactPeople')->latest()->get(),
         ]);
@@ -34,6 +44,8 @@ class ClientController extends Controller
 
     public function store(Request $request)
     {
+        Gate::authorize('create', Client::class);
+
         $validated = $request->validate($this->clientRules() + [
             'contacts'                  => 'required|array|min:1',
             'contacts.*.contact_person' => 'required|string|max:255',
@@ -55,6 +67,8 @@ class ClientController extends Controller
 
     public function update(Request $request, Client $client)
     {
+        Gate::authorize('update', $client);
+
         $validated = $request->validate($this->clientRules() + [
             'contacts'                  => 'required|array|min:1',
             'contacts.*.contact_person' => 'required|string|max:255',
@@ -78,13 +92,18 @@ class ClientController extends Controller
 
     public function destroy(Client $client)
     {
+        Gate::authorize('delete', $client);
+
         $client->delete();
 
         return redirect()->back();
     }
 
+    /** Quick-add a client (with its first contact) from inside a form. Needs client.create. */
     public function quickStore(Request $request)
     {
+        Gate::authorize('create', Client::class);
+
         $validated = $request->validate($this->clientRules() + $this->contactRules());
 
         $client = Client::create([
@@ -101,8 +120,11 @@ class ClientController extends Controller
         return response()->json($client->load('contactPeople'));
     }
 
+    /** Quick-add a contact person to an existing client from inside a form. Needs client.edit. */
     public function quickStoreContact(Request $request, Client $client)
     {
+        Gate::authorize('update', $client);
+
         $validated = $request->validate($this->contactRules());
 
         return response()->json($client->contactPeople()->create($validated));

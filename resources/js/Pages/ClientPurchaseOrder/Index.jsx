@@ -16,8 +16,21 @@ const STYLE = {
     cancelled: 'bg-red-50 text-red-700 ring-red-200',
 };
 
+/**
+ * PERMISSION (the server checks all of these again):
+ *   confirm_client_po  client_po.confirm -> Confirm button
+ *   edit_client_po     client_po.edit    -> Edit and Cancel buttons
+ *   delete_client_po   client_po.delete  -> Delete button
+ *   view_amounts       amounts.view      -> Total column
+ */
 export default function Index({ clientPurchaseOrders, statuses }) {
-    const { flash, errors } = usePage().props;
+    const { flash, errors, auth } = usePage().props;
+    const can = auth?.can ?? {};
+    const canConfirm = Boolean(can.confirm_client_po);
+    const canEdit = Boolean(can.edit_client_po);
+    const canDelete = Boolean(can.delete_client_po);
+    const canViewAmounts = Boolean(can.view_amounts);
+
     const [tab, setTab] = useState('all');
     const [deleting, setDeleting] = useState(null);
     const [toast, setToast] = useState(null);
@@ -47,6 +60,14 @@ export default function Index({ clientPurchaseOrders, statuses }) {
 
     const confirm = (p) => router.post(route('client-purchase-orders.confirm', p.id), {}, { preserveScroll: true });
     const cancel = (p) => router.patch(route('client-purchase-orders.cancel', p.id), {}, { preserveScroll: true });
+
+    // Does this row have at least one button for this user? (decides if the Actions column shows)
+    const hasActions = (p) =>
+        (canConfirm && p.status === 'draft') ||
+        (canEdit && p.status !== 'cancelled') ||
+        (canEdit && p.status === 'draft') ||
+        (canDelete && ['draft', 'cancelled'].includes(p.status));
+    const showActions = clientPurchaseOrders.some(hasActions);
 
     return (
         <AuthenticatedLayout
@@ -91,8 +112,8 @@ export default function Index({ clientPurchaseOrders, statuses }) {
                                     <TableHead>Client</TableHead>
                                     <TableHead>Status</TableHead>
                                     <TableHead className="text-right">Units</TableHead>
-                                    <TableHead className="text-right">Total</TableHead>
-                                    <TableHead className="text-right">Actions</TableHead>
+                                    {canViewAmounts && <TableHead className="text-right">Total</TableHead>}
+                                    {showActions && <TableHead className="text-right">Actions</TableHead>}
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -121,31 +142,35 @@ export default function Index({ clientPurchaseOrders, statuses }) {
                                         <TableCell className="text-right tabular-nums">
                                             {p.items.reduce((s, i) => s + i.quantity, 0)}
                                         </TableCell>
-                                        <TableCell className="text-right font-medium tabular-nums">{currency(p.amount)}</TableCell>
-                                        <TableCell className="flex flex-wrap justify-end gap-2">
-                                            {p.status === 'draft' && (
-                                                <Button variant="brand" onClick={() => confirm(p)}>
-                                                    <Check className="size-3.5" /> Confirm
-                                                </Button>
-                                            )}
-                                            {p.status !== 'cancelled' && (
-                                                <Link href={route('client-purchase-orders.edit', p.id)}>
-                                                    <Button variant="outline" size="icon" aria-label="Edit">
-                                                        <Pencil className="h-4 w-4" />
+                                        {canViewAmounts && (
+                                            <TableCell className="text-right font-medium tabular-nums">{currency(p.amount)}</TableCell>
+                                        )}
+                                        {showActions && (
+                                            <TableCell className="flex flex-wrap justify-end gap-2">
+                                                {canConfirm && p.status === 'draft' && (
+                                                    <Button variant="brand" onClick={() => confirm(p)}>
+                                                        <Check className="size-3.5" /> Confirm
                                                     </Button>
-                                                </Link>
-                                            )}
-                                            {p.status === 'draft' && (
-                                                <Button variant="outline" size="icon" aria-label="Cancel" onClick={() => cancel(p)}>
-                                                    <Ban className="h-4 w-4" />
-                                                </Button>
-                                            )}
-                                            {['draft', 'cancelled'].includes(p.status) && (
-                                                <Button variant="outline" size="icon" aria-label="Delete" onClick={() => setDeleting(p)}>
-                                                    <Trash2 className="h-4 w-4" />
-                                                </Button>
-                                            )}
-                                        </TableCell>
+                                                )}
+                                                {canEdit && p.status !== 'cancelled' && (
+                                                    <Link href={route('client-purchase-orders.edit', p.id)}>
+                                                        <Button variant="outline" size="icon" aria-label="Edit">
+                                                            <Pencil className="h-4 w-4" />
+                                                        </Button>
+                                                    </Link>
+                                                )}
+                                                {canEdit && p.status === 'draft' && (
+                                                    <Button variant="outline" size="icon" aria-label="Cancel" onClick={() => cancel(p)}>
+                                                        <Ban className="h-4 w-4" />
+                                                    </Button>
+                                                )}
+                                                {canDelete && ['draft', 'cancelled'].includes(p.status) && (
+                                                    <Button variant="outline" size="icon" aria-label="Delete" onClick={() => setDeleting(p)}>
+                                                        <Trash2 className="h-4 w-4" />
+                                                    </Button>
+                                                )}
+                                            </TableCell>
+                                        )}
                                     </TableRow>
                                 ))}
                             </TableBody>
@@ -154,13 +179,15 @@ export default function Index({ clientPurchaseOrders, statuses }) {
                 </div>
             </PageCard>
 
-            <ConfirmDelete
-                show={Boolean(deleting)}
-                onClose={() => setDeleting(null)}
-                deleteUrl={deleting ? route('client-purchase-orders.destroy', deleting.id) : null}
-                itemLabel={deleting ? deleting.cpo_number : 'this client purchase order'}
-                title="Delete client purchase order?"
-            />
+            {canDelete && (
+                <ConfirmDelete
+                    show={Boolean(deleting)}
+                    onClose={() => setDeleting(null)}
+                    deleteUrl={deleting ? route('client-purchase-orders.destroy', deleting.id) : null}
+                    itemLabel={deleting ? deleting.cpo_number : 'this client purchase order'}
+                    title="Delete client purchase order?"
+                />
+            )}
 
             <StockToast message={toast} title="Done" onClose={() => setToast(null)} />
             <StockToast message={warning} title="Can't do that" tone="warning" onClose={() => setWarning(null)} />

@@ -1,7 +1,7 @@
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout';
 import PageHeading from '@/Components/PageHeading';
 import PageCard from '@/Components/PageCard';
-import { Head, Link } from '@inertiajs/react';
+import { Head, Link, usePage } from '@inertiajs/react';
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/Components/ui/table';
 import { Button } from '@/Components/ui/Button';
 import { Pencil, Printer } from 'lucide-react';
@@ -10,8 +10,19 @@ import { currency } from '@/Components/ui/kit';
 /**
  * A quotation is a document of a transaction, so this list is the transactions that have been
  * issued a quotation number. Editing happens in the transaction.
+ *
+ * PERMISSION (the server checks all of these again):
+ *   print_quotation  quotation.view + amounts.view  -> Print button
+ *   edit_quotation   quotation.edit                 -> Edit button
+ *   view_amounts     amounts.view                   -> Amount column
  */
 export default function Index({ quotations }) {
+    const can = usePage().props.auth?.can ?? {};
+    const canPrint = Boolean(can.print_quotation);
+    const canEdit = Boolean(can.edit_quotation);
+    const canViewAmounts = Boolean(can.view_amounts);
+    const showActions = canPrint || canEdit;
+
     return (
         <AuthenticatedLayout
             header={
@@ -36,8 +47,8 @@ export default function Index({ quotations }) {
                                     <TableHead>Client</TableHead>
                                     <TableHead>Prepared by</TableHead>
                                     <TableHead>Stage</TableHead>
-                                    <TableHead className="text-right">Amount</TableHead>
-                                    <TableHead className="text-right">Actions</TableHead>
+                                    {canViewAmounts && <TableHead className="text-right">Amount</TableHead>}
+                                    {showActions && <TableHead className="text-right">Actions</TableHead>}
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -74,15 +85,23 @@ export default function Index({ quotations }) {
                                             <p>{t.stage?.stage_name ?? '—'}</p>
                                             <p className="text-xs capitalize text-slate-500">{t.status}</p>
                                         </TableCell>
-                                        <TableCell className="text-right font-medium tabular-nums">{currency(t.amount)}</TableCell>
-                                        <TableCell className="flex flex-wrap justify-end gap-2">
-                                            <a href={route('transactions.quotation.print', t.id)} target="_blank" rel="noreferrer">
-                                                <Button variant="outline" size="icon" aria-label="Print"><Printer className="h-4 w-4" /></Button>
-                                            </a>
-                                            <Link href={route('transactions.edit', t.id)}>
-                                                <Button variant="outline" size="icon" aria-label="Edit transaction"><Pencil className="h-4 w-4" /></Button>
-                                            </Link>
-                                        </TableCell>
+                                        {canViewAmounts && (
+                                            <TableCell className="text-right font-medium tabular-nums">{currency(t.amount)}</TableCell>
+                                        )}
+                                        {showActions && (
+                                            <TableCell className="flex flex-wrap justify-end gap-2">
+                                                {canPrint && (
+                                                    <a href={route('transactions.quotation.print', t.id)} target="_blank" rel="noreferrer">
+                                                        <Button variant="outline" size="icon" aria-label="Print"><Printer className="h-4 w-4" /></Button>
+                                                    </a>
+                                                )}
+                                                {canEdit && (
+                                                    <Link href={route('transactions.edit', t.id)}>
+                                                        <Button variant="outline" size="icon" aria-label="Edit transaction"><Pencil className="h-4 w-4" /></Button>
+                                                    </Link>
+                                                )}
+                                            </TableCell>
+                                        )}
                                     </TableRow>
                                 ))}
                             </TableBody>

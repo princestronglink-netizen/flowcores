@@ -1,8 +1,8 @@
 import { Link, useForm } from '@inertiajs/react';
 import { Button } from '@/Components/ui/Button';
-import { ArrowLeft, ClipboardList, Receipt } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, ClipboardList, Receipt } from 'lucide-react';
 import { Banner, Field, Panel, SummaryLine, currency, cx, input, inputCls } from '@/Components/ui/kit';
-import LineItemsEditor, { linesFromServer, linesTotal } from '@/Components/ui/LineItemsEditor';
+import LineItemsEditor, { hasDuplicateLines, linesFromServer, linesTotal } from '@/Components/ui/LineItemsEditor';
 
 // Mirrors Transaction::breakdown() on the server: subtotal -> markup -> VAT -> grand total.
 const r2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -40,7 +40,11 @@ export default function ClientPurchaseOrderForm({ catalog = [], clientPurchaseOr
         if (String(value).trim() !== '') clearErrors(name, 'client_po');
     };
 
+    // Two lines with the same variant: stay on the form until it is fixed (the server rejects it too).
+    const hasDuplicates = hasDuplicateLines(data.items);
+
     const save = (confirm) => {
+        if (hasDuplicates) return;
         transform((d) => ({ ...d, confirm }));
         put(route('client-purchase-orders.update', po.id), { preserveScroll: true });
     };
@@ -59,6 +63,7 @@ export default function ClientPurchaseOrderForm({ catalog = [], clientPurchaseOr
     const txAmount = Number(po.transaction?.amount ?? 0);
     const differs = Math.abs(total - txAmount) > 0.004;
     const hasErrors = Object.keys(errors).length > 0;
+    const saveDisabled = processing || hasDuplicates;
 
     return (
         <form onSubmit={submit} noValidate className="mx-auto w-full max-w-[1680px] p-4 sm:p-6">
@@ -223,21 +228,27 @@ export default function ClientPurchaseOrderForm({ catalog = [], clientPurchaseOr
                                 The transaction is currently {currency(txAmount)}. Confirming changes it to {currency(total)}.
                             </Banner>
                         )}
+                        {hasDuplicates && (
+                            <Banner tone="warning" icon={AlertTriangle} title="Repeated item and variant" className="mt-4">
+                                Two or more lines use the same item and variant. Change the variant or remove the repeated
+                                lines before saving.
+                            </Banner>
+                        )}
                         {hasErrors && !errors.client_po && (
                             <Banner tone="error" className="mt-4">Fix the highlighted fields before saving.</Banner>
                         )}
 
                         <div className="mt-5 flex flex-col gap-2">
                             {isConfirmed ? (
-                                <Button type="submit" variant="brand" className="w-full" disabled={processing}>
+                                <Button type="submit" variant="brand" className="w-full" disabled={saveDisabled}>
                                     {processing ? 'Saving…' : 'Save changes'}
                                 </Button>
                             ) : (
                                 <>
-                                    <Button type="button" variant="brand" className="w-full" disabled={processing} onClick={() => save(true)}>
+                                    <Button type="button" variant="brand" className="w-full" disabled={saveDisabled} onClick={() => save(true)}>
                                         {processing ? 'Saving…' : 'Save & confirm'}
                                     </Button>
-                                    <Button type="submit" variant="outline" className="w-full" disabled={processing}>
+                                    <Button type="submit" variant="outline" className="w-full" disabled={saveDisabled}>
                                         Save draft
                                     </Button>
                                 </>

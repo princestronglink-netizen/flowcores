@@ -7,24 +7,51 @@ use App\Models\ClientPurchaseOrder;
 use App\Models\Transaction;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
 use Inertia\Inertia;
 
+/**
+ * PERMISSIONS (ClientPurchaseOrderPolicy):
+ *   index                    -> viewAny  (client_po.view)
+ *   edit / update / cancel   -> update   (client_po.edit)
+ *   confirm                  -> confirm  (client_po.confirm)
+ *                               (update() with "confirm" ticked needs it too)
+ *   destroy                  -> delete   (client_po.delete)
+ * Prices are only sent to users with amounts.view.
+ */
 class ClientPurchaseOrderController extends Controller
 {
     use HandlesLineItems;
 
-    public function index()
+    public function index(Request $request)
     {
+        Gate::authorize('viewAny', ClientPurchaseOrder::class);
+
+        $orders = ClientPurchaseOrder::with([
+            'client', 'contactPerson', 'items', 'transaction:id,name,status',
+        ])->latest()->get();
+
+        // No amounts.view = the prices never leave the server.
+        if (! $request->user()->can('amounts.view')) {
+            $orders->each(function ($order) {
+                $order->makeHidden([
+                    'amount', 'subtotal', 'markup_percent', 'markup_amount',
+                    'vat_percent', 'vat_amount', 'total',
+                ]);
+                $order->items->each->makeHidden(['unit_price', 'subtotal', 'line_total']);
+            });
+        }
+
         return Inertia::render('ClientPurchaseOrder/Index', [
-            'clientPurchaseOrders' => ClientPurchaseOrder::with([
-                'client', 'contactPerson', 'items', 'transaction:id,name,status',
-            ])->latest()->get(),
-            'statuses' => ClientPurchaseOrder::STATUSES,
+            'clientPurchaseOrders' => $orders,
+            'statuses'             => ClientPurchaseOrder::STATUSES,
         ]);
     }
 
     public function edit(Request $request, ClientPurchaseOrder $clientPurchaseOrder)
     {
+        Gate::authorize('update', $clientPurchaseOrder);
+
         $from = $request->query('from') === 'pipeline' ? 'pipeline' : null;
 
         if ($reason = $clientPurchaseOrder->lockReason()) {
@@ -68,6 +95,8 @@ class ClientPurchaseOrderController extends Controller
 
     public function update(Request $request, ClientPurchaseOrder $clientPurchaseOrder)
     {
+        Gate::authorize('update', $clientPurchaseOrder);
+
         if ($reason = $clientPurchaseOrder->lockReason()) {
             return back()->withErrors(['client_po' => $reason]);
         }
@@ -75,6 +104,11 @@ class ClientPurchaseOrderController extends Controller
         $v    = $request->validate($this->rules());
         $rows = $this->buildItemRows($v['items'], 'unit_price');
         $wantsConfirm = $request->boolean('confirm') && $clientPurchaseOrder->status === 'draft';
+
+        // "Save and confirm" is a confirmation, so it needs the confirm permission as well.
+        if ($wantsConfirm) {
+            Gate::authorize('confirm', $clientPurchaseOrder);
+        }
 
         try {
             DB::transaction(function () use ($v, $rows, $clientPurchaseOrder, $wantsConfirm) {
@@ -126,6 +160,8 @@ class ClientPurchaseOrderController extends Controller
 
     public function confirm(ClientPurchaseOrder $clientPurchaseOrder)
     {
+        Gate::authorize('confirm', $clientPurchaseOrder);
+
         try {
             $clientPurchaseOrder->confirm(auth()->id());
         } catch (\RuntimeException $e) {
@@ -137,6 +173,8 @@ class ClientPurchaseOrderController extends Controller
 
     public function cancel(ClientPurchaseOrder $clientPurchaseOrder)
     {
+        Gate::authorize('update', $clientPurchaseOrder);
+
         if ($clientPurchaseOrder->status !== 'draft') {
             return back()->withErrors(['status' => 'Only a draft client purchase order can be cancelled.']);
         }
@@ -148,6 +186,8 @@ class ClientPurchaseOrderController extends Controller
 
     public function destroy(ClientPurchaseOrder $clientPurchaseOrder)
     {
+        Gate::authorize('delete', $clientPurchaseOrder);
+
         if (! in_array($clientPurchaseOrder->status, ['draft', 'cancelled'], true)) {
             return back()->with('stock_warning', 'Only draft or cancelled client purchase orders can be deleted.');
         }

@@ -1,5 +1,5 @@
-import AuthenticatedLayout from '@Layouts/AuthenticatedLayout';
-import { Head } from '@inertiajs/react';
+import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout';
+import { Head, usePage } from '@inertiajs/react';
 import {
     Table,
     TableHeader,
@@ -8,7 +8,7 @@ import {
     TableHead,
     TableCell,
 } from "@/Components/ui/table";
-import { Button } from "@/Components/ui/button";
+import { Button } from "@/Components/ui/Button";
 import { Plus, Pencil, Trash2 } from "lucide-react";
 import PageCard from '@/Components/PageCard';
 import PageToolbar from '@/Components/PageToolbar';
@@ -16,17 +16,31 @@ import ClientModal from '@/Components/Client/ClientModal';
 import ConfirmDelete from '@/Components/ConfirmationModal/ConfirmDelete';
 import { useState } from 'react';
 
+/**
+ * PERMISSION (the server checks all of these again):
+ *   create_client  client.create -> New Client button
+ *   edit_client    client.edit   -> Edit button
+ *   delete_client  client.delete -> Delete button
+ */
 export default function Index({ clients }) {
+    const can = usePage().props.auth?.can ?? {};
+    const canCreate = Boolean(can.create_client);
+    const canEdit = Boolean(can.edit_client);
+    const canDelete = Boolean(can.delete_client);
+    const showActions = canEdit || canDelete;
+
     const [isOpen, setIsOpen] = useState(false);
     const [editingClient, setEditingClient] = useState(null);
     const [deletingClient, setDeletingClient] = useState(null);
 
     const openCreate = () => {
+        if (!canCreate) return;
         setEditingClient(null);
         setIsOpen(true);
     };
 
     const openEdit = (client) => {
+        if (!canEdit) return;
         setEditingClient(client);
         setIsOpen(true);
     };
@@ -42,12 +56,15 @@ export default function Index({ clients }) {
 
             <PageCard
                 toolbar={
-                    <PageToolbar>
-                        <Button variant="brand" onClick={openCreate}>
-                            <Plus />
-                            New Client
-                        </Button>
-                    </PageToolbar>
+                    // PERMISSION: the New Client button only shows for users who can create
+                    canCreate ? (
+                        <PageToolbar>
+                            <Button variant="brand" onClick={openCreate}>
+                                <Plus />
+                                New Client
+                            </Button>
+                        </PageToolbar>
+                    ) : undefined
                 }
             >
                 <div className="p-5">
@@ -59,7 +76,7 @@ export default function Index({ clients }) {
                                 <TableHead>Contact Person</TableHead>
                                 <TableHead>Contact Number</TableHead>
                                 <TableHead>Email</TableHead>
-                                <TableHead className="text-right">Actions</TableHead>
+                                {showActions && <TableHead className="text-right">Actions</TableHead>}
                             </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -72,14 +89,20 @@ export default function Index({ clients }) {
                                     <TableCell>{client.contact_people?.[0]?.contact_person ?? '—'}</TableCell>
                                     <TableCell>{client.contact_people?.[0]?.contact_number ?? '—'}</TableCell>
                                     <TableCell>{client.contact_people?.[0]?.email ?? '—'}</TableCell>
-                                    <TableCell className="flex justify-end gap-2 text-right">
-                                        <Button variant="outline" size="icon" onClick={() => openEdit(client)}>
-                                            <Pencil className="h-4 w-4" />
-                                        </Button>
-                                        <Button variant="outline" size="icon" onClick={() => setDeletingClient(client)}>
-                                            <Trash2 className="h-4 w-4" />
-                                        </Button>
-                                    </TableCell>
+                                    {showActions && (
+                                        <TableCell className="flex justify-end gap-2 text-right">
+                                            {canEdit && (
+                                                <Button variant="outline" size="icon" aria-label="Edit client" onClick={() => openEdit(client)}>
+                                                    <Pencil className="h-4 w-4" />
+                                                </Button>
+                                            )}
+                                            {canDelete && (
+                                                <Button variant="outline" size="icon" aria-label="Delete client" onClick={() => setDeletingClient(client)}>
+                                                    <Trash2 className="h-4 w-4" />
+                                                </Button>
+                                            )}
+                                        </TableCell>
+                                    )}
                                 </TableRow>
                             ))}
                         </TableBody>
@@ -87,15 +110,18 @@ export default function Index({ clients }) {
                 </div>
             </PageCard>
 
-            <ClientModal show={isOpen} onClose={closeModal} client={editingClient} />
+            {/* The modal is only mounted for users who can create or edit */}
+            {(canCreate || canEdit) && <ClientModal show={isOpen} onClose={closeModal} client={editingClient} />}
 
-            <ConfirmDelete
-                show={Boolean(deletingClient)}
-                onClose={() => setDeletingClient(null)}
-                deleteUrl={deletingClient ? route('clients.destroy', deletingClient.id) : null}
-                itemLabel={deletingClient ? `"${deletingClient.client_name}" and all of its contact people` : 'this client'}
-                title="Delete client?"
-            />
+            {canDelete && (
+                <ConfirmDelete
+                    show={Boolean(deletingClient)}
+                    onClose={() => setDeletingClient(null)}
+                    deleteUrl={deletingClient ? route('clients.destroy', deletingClient.id) : null}
+                    itemLabel={deletingClient ? `"${deletingClient.client_name}" and all of its contact people` : 'this client'}
+                    title="Delete client?"
+                />
+            )}
         </AuthenticatedLayout>
     );
 }

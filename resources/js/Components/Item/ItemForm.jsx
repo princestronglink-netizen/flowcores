@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import axios from 'axios';
-import { Link, useForm } from '@inertiajs/react';
+import { Link, useForm, usePage } from '@inertiajs/react';
 import { Button } from '@/Components/ui/Button';
 import SearchSelect from '@/Components/ui/SearchSelect';
 import { ArrowLeft, Package, Plus, Tags, Trash2 } from 'lucide-react';
@@ -24,6 +24,10 @@ const mobileLabel = 'mb-1 block text-xs font-medium text-slate-500 sm:hidden';
 
 export default function ItemForm({ item = null, categories = [] }) {
     const isEditing = Boolean(item);
+
+    // PERMISSION: auth.can.create_category (category.create) -> the "New" category quick-add
+    // (the server checks this again in ItemCategoryController::quickStore)
+    const canAddCategory = Boolean(usePage().props.auth?.can?.create_category);
 
     const initialData = item
         ? {
@@ -65,6 +69,7 @@ export default function ItemForm({ item = null, categories = [] }) {
     );
 
     const addCategory = async () => {
+        if (!canAddCategory) return;
         setCategoryError('');
         try {
             const res = await axios.post(route('categories.quickStore'), { category_name: newCategoryName });
@@ -147,9 +152,11 @@ export default function ItemForm({ item = null, categories = [] }) {
                                         htmlFor="item_category_id"
                                         error={categoryError || errors.item_category_id}
                                         action={
-                                            <LinkButton icon={Plus} onClick={() => setNewCategoryName((v) => (v === null ? '' : null))}>
-                                                New
-                                            </LinkButton>
+                                            canAddCategory ? (
+                                                <LinkButton icon={Plus} onClick={() => setNewCategoryName((v) => (v === null ? '' : null))}>
+                                                    New
+                                                </LinkButton>
+                                            ) : undefined
                                         }
                                     >
                                         <SearchSelect
@@ -164,7 +171,7 @@ export default function ItemForm({ item = null, categories = [] }) {
                                             inputClassName={input(errors.item_category_id)}
                                         />
                                     </Field>
-                                    {newCategoryName !== null && (
+                                    {canAddCategory && newCategoryName !== null && (
                                         <div className="mt-2 flex gap-2">
                                             <input
                                                 type="text"

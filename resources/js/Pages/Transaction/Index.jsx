@@ -3,7 +3,7 @@ import PageHeading from '@/Components/PageHeading';
 import PageCard from '@/Components/PageCard';
 import PageToolbar from '@/Components/PageToolbar';
 import ConfirmDelete from '@/Components/ConfirmationModal/ConfirmDelete';
-import { Head, Link } from '@inertiajs/react';
+import { Head, Link, usePage } from '@inertiajs/react';
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/Components/ui/table';
 import { Button } from '@/Components/ui/Button';
 import { Pencil, Plus, Search, Trash2 } from 'lucide-react';
@@ -23,7 +23,21 @@ const statusStyle = {
     lost: 'bg-red-50 text-red-700 ring-red-200',
 };
 
+/**
+ * PERMISSION (the server checks all of these again):
+ *   create_transaction  transaction.create -> New transaction button
+ *   edit_transaction    transaction.edit   -> Edit button
+ *   delete_transaction  transaction.delete -> Delete button
+ *   view_amounts        amounts.view       -> Amount column
+ */
 export default function Index({ transactions }) {
+    const can = usePage().props.auth?.can ?? {};
+    const canCreate = Boolean(can.create_transaction);
+    const canEdit = Boolean(can.edit_transaction);
+    const canDelete = Boolean(can.delete_transaction);
+    const canViewAmounts = Boolean(can.view_amounts);
+    const showActions = canEdit || canDelete;
+
     const [deleting, setDeleting] = useState(null);
     const [q, setQ] = useState('');
     const [status, setStatus] = useState('open');
@@ -74,14 +88,17 @@ export default function Index({ transactions }) {
 
             <PageCard
                 toolbar={
-                    <PageToolbar>
-                        <Link href={route('transactions.create')}>
-                            <Button variant="brand">
-                                <Plus />
-                                New transaction
-                            </Button>
-                        </Link>
-                    </PageToolbar>
+                    // PERMISSION: the New transaction button only shows for users who can create
+                    canCreate ? (
+                        <PageToolbar>
+                            <Link href={route('transactions.create')}>
+                                <Button variant="brand">
+                                    <Plus />
+                                    New transaction
+                                </Button>
+                            </Link>
+                        </PageToolbar>
+                    ) : undefined
                 }
             >
                 <div className="p-5">
@@ -158,7 +175,9 @@ export default function Index({ transactions }) {
                     {rows.length === 0 ? (
                         <div className="py-14 text-center">
                             <p className="text-sm font-semibold text-slate-900">No transactions found</p>
-                            <p className="mt-1 text-sm text-slate-500">Change the filters, or create a new transaction.</p>
+                            <p className="mt-1 text-sm text-slate-500">
+                                {canCreate ? 'Change the filters, or create a new transaction.' : 'Change the filters to see more.'}
+                            </p>
                         </div>
                     ) : (
                         <Table>
@@ -170,8 +189,8 @@ export default function Index({ transactions }) {
                                     <TableHead>Priority</TableHead>
                                     <TableHead>Status</TableHead>
                                     <TableHead className="text-right">Items</TableHead>
-                                    <TableHead className="text-right">Amount</TableHead>
-                                    <TableHead className="text-right">Actions</TableHead>
+                                    {canViewAmounts && <TableHead className="text-right">Amount</TableHead>}
+                                    {showActions && <TableHead className="text-right">Actions</TableHead>}
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -214,19 +233,27 @@ export default function Index({ transactions }) {
                                             </span>
                                         </TableCell>
                                         <TableCell className="text-right tabular-nums">{t.items?.length ?? 0}</TableCell>
-                                        <TableCell className="text-right font-medium tabular-nums">
-                                            {t.amount != null ? currency(t.amount) : '—'}
-                                        </TableCell>
-                                        <TableCell className="flex justify-end gap-2 text-right">
-                                            <Link href={route('transactions.edit', t.id)}>
-                                                <Button variant="outline" size="icon" aria-label="Edit transaction">
-                                                    <Pencil className="h-4 w-4" />
-                                                </Button>
-                                            </Link>
-                                            <Button variant="outline" size="icon" aria-label="Delete transaction" onClick={() => setDeleting(t)}>
-                                                <Trash2 className="h-4 w-4" />
-                                            </Button>
-                                        </TableCell>
+                                        {canViewAmounts && (
+                                            <TableCell className="text-right font-medium tabular-nums">
+                                                {t.amount != null ? currency(t.amount) : '—'}
+                                            </TableCell>
+                                        )}
+                                        {showActions && (
+                                            <TableCell className="flex justify-end gap-2 text-right">
+                                                {canEdit && (
+                                                    <Link href={route('transactions.edit', t.id)}>
+                                                        <Button variant="outline" size="icon" aria-label="Edit transaction">
+                                                            <Pencil className="h-4 w-4" />
+                                                        </Button>
+                                                    </Link>
+                                                )}
+                                                {canDelete && (
+                                                    <Button variant="outline" size="icon" aria-label="Delete transaction" onClick={() => setDeleting(t)}>
+                                                        <Trash2 className="h-4 w-4" />
+                                                    </Button>
+                                                )}
+                                            </TableCell>
+                                        )}
                                     </TableRow>
                                 ))}
                             </TableBody>
@@ -235,13 +262,15 @@ export default function Index({ transactions }) {
                 </div>
             </PageCard>
 
-            <ConfirmDelete
-                show={Boolean(deleting)}
-                onClose={() => setDeleting(null)}
-                deleteUrl={deleting ? route('transactions.destroy', deleting.id) : null}
-                itemLabel={deleting ? `"${deleting.name || 'this transaction'}"` : 'this transaction'}
-                title="Delete transaction?"
-            />
+            {canDelete && (
+                <ConfirmDelete
+                    show={Boolean(deleting)}
+                    onClose={() => setDeleting(null)}
+                    deleteUrl={deleting ? route('transactions.destroy', deleting.id) : null}
+                    itemLabel={deleting ? `"${deleting.name || 'this transaction'}"` : 'this transaction'}
+                    title="Delete transaction?"
+                />
+            )}
         </AuthenticatedLayout>
     );
 }

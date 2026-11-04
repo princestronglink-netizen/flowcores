@@ -5,7 +5,7 @@ import PageCard from '@/Components/PageCard';
 import PageToolbar from '@/Components/PageToolbar';
 import ConfirmDelete from '@/Components/ConfirmationModal/ConfirmDelete';
 import { Button } from '@/Components/ui/Button';
-import { Head, Link } from '@inertiajs/react';
+import { Head, Link, usePage } from '@inertiajs/react';
 import {
     ChevronDown,
     ChevronRight,
@@ -51,14 +51,26 @@ function Stat({ label, value, tone = 'text-slate-900', onClick, active }) {
     );
 }
 
+/**
+ * PERMISSION (the server checks all of these again):
+ *   create_item  item.create -> New item button
+ *   edit_item    item.edit   -> Edit / Edit details buttons
+ *   delete_item  item.delete -> Delete item button
+ */
 export default function Index({ items, categories = [] }) {
+    const can = usePage().props.auth?.can ?? {};
+    const canCreate = Boolean(can.create_item);
+    const canEdit = Boolean(can.edit_item);
+    const canDelete = Boolean(can.delete_item);
+
     const [q, setQ] = useState('');
     const [categoryFilter, setCategoryFilter] = useState('');
     const [tab, setTab] = useState('all'); // all | restock | out
     const [openIds, setOpenIds] = useState(() => new Set());
     const [deletingItem, setDeletingItem] = useState(null);
     const stockOf = (v) => Number(v.stock);
-    // Status is computed on the server from the 30-day demand (MOQ).
+    // Status is computed on the server from the reorder point
+    // (30-day average daily demand × (lead time + safety stock days)).
     const statusOf = (v) => v.stock_status ?? 'ok';
 
     const enriched = useMemo(
@@ -127,12 +139,15 @@ export default function Index({ items, categories = [] }) {
                                 Adjust stock
                             </Button>
                         </Link>
-                        <Link href={route('items.create')}>
-                            <Button variant="brand">
-                                <Plus />
-                                New item
-                            </Button>
-                        </Link>
+                        {/* PERMISSION: the New item button only shows for users who can create */}
+                        {canCreate && (
+                            <Link href={route('items.create')}>
+                                <Button variant="brand">
+                                    <Plus />
+                                    New item
+                                </Button>
+                            </Link>
+                        )}
                     </PageToolbar>
                 }
             >
@@ -284,9 +299,12 @@ export default function Index({ items, categories = [] }) {
                                         </span>
 
                                         <span className="flex justify-end">
-                                            <Link href={route('items.edit', item.id)}>
-                                                <Button variant="outline">Edit</Button>
-                                            </Link>
+                                            {/* PERMISSION: Edit only shows for users who can edit items */}
+                                            {canEdit && (
+                                                <Link href={route('items.edit', item.id)}>
+                                                    <Button variant="outline">Edit</Button>
+                                                </Link>
+                                            )}
                                         </span>
                                     </div>
 
@@ -302,32 +320,40 @@ export default function Index({ items, categories = [] }) {
                                                         </p>
                                                     </div>
                                                     <div className="flex items-center gap-2">
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => setDeletingItem(item)}
-                                                            className="flex items-center gap-1 rounded-md px-2 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50"
-                                                        >
-                                                            <Trash2 className="size-3.5" />
-                                                            Delete item
-                                                        </button>
-                                                        <Link href={route('items.edit', item.id)}>
-                                                            <Button variant="outline">
-                                                                <Pencil className="size-3.5" />
-                                                                Edit details
-                                                            </Button>
-                                                        </Link>
+                                                        {canDelete && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => setDeletingItem(item)}
+                                                                className="flex items-center gap-1 rounded-md px-2 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50"
+                                                            >
+                                                                <Trash2 className="size-3.5" />
+                                                                Delete item
+                                                            </button>
+                                                        )}
+                                                        {canEdit && (
+                                                            <Link href={route('items.edit', item.id)}>
+                                                                <Button variant="outline">
+                                                                    <Pencil className="size-3.5" />
+                                                                    Edit details
+                                                                </Button>
+                                                            </Link>
+                                                        )}
                                                     </div>
                                                 </div>
 
                                                 <div className={cx('hidden gap-3 border-y border-slate-200 bg-slate-50 px-4 py-2 text-xs font-medium text-slate-500 md:grid', variantGrid)}>
                                                     <span>Size</span>
                                                     <span>Stock</span>
-                                                    <span title="Total ordered in the last 30 days">MOQ (30 days)</span>
+                                                    <span title="Reorder when stock reaches this level. Based on 30-day average demand × (lead time + safety days)">
+                                                        Reorder point
+                                                    </span>
                                                     <span className="text-right">Actions</span>
                                                 </div>
 
                                                 {item.brands.length === 0 && (
-                                                    <p className="px-4 py-4 text-xs text-slate-500">No brands or sizes yet. Use “Edit details” to add them.</p>
+                                                    <p className="px-4 py-4 text-xs text-slate-500">
+                                                        No brands or sizes yet.{canEdit ? ' Use “Edit details” to add them.' : ''}
+                                                    </p>
                                                 )}
 
                                                 {item.brands.map((b) => (
@@ -355,9 +381,9 @@ export default function Index({ items, categories = [] }) {
                                                                         </span>
                                                                         <span
                                                                             className="text-sm font-semibold tabular-nums text-slate-700"
-                                                                            title="Total ordered in the last 30 days"
+                                                                            title="Reorder when stock reaches this level"
                                                                         >
-                                                                            {Number(v.moq) > 0 ? v.moq : '—'}
+                                                                            {Number(v.reorder_point) > 0 ? v.reorder_point : '—'}
                                                                         </span>
                                                                         <span className="flex flex-wrap justify-start gap-2 md:justify-end">
                                                                             <Link href={route('stock-adjust.index', { variant: v.id })}>
@@ -383,13 +409,15 @@ export default function Index({ items, categories = [] }) {
                 )}
             </PageCard>
 
-            <ConfirmDelete
-                show={Boolean(deletingItem)}
-                onClose={() => setDeletingItem(null)}
-                deleteUrl={deletingItem ? route('items.destroy', deletingItem.id) : null}
-                itemLabel={deletingItem ? `"${deletingItem.item_name}" and all of its brands and variants` : 'this item'}
-                title="Delete item?"
-            />
+            {canDelete && (
+                <ConfirmDelete
+                    show={Boolean(deletingItem)}
+                    onClose={() => setDeletingItem(null)}
+                    deleteUrl={deletingItem ? route('items.destroy', deletingItem.id) : null}
+                    itemLabel={deletingItem ? `"${deletingItem.item_name}" and all of its brands and variants` : 'this item'}
+                    title="Delete item?"
+                />
+            )}
         </AuthenticatedLayout>
     );
 }

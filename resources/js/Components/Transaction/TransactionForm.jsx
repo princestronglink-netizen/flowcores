@@ -3,18 +3,17 @@ import axios from 'axios';
 import { Link, useForm, usePage } from '@inertiajs/react';
 import { Button } from '@/Components/ui/Button';
 import SearchSelect from '@/Components/ui/SearchSelect';
+import LineItemsEditor, { duplicateLineCount, linesFromServer } from '@/Components/ui/LineItemsEditor';
 import {
     AlertTriangle,
     ArrowLeft,
     Building2,
     ChevronDown,
     Lock,
-    Package,
     Percent,
     Plus,
     Receipt,
     StickyNote,
-    Trash2,
     Trophy,
     UserRound,
     X,
@@ -22,7 +21,6 @@ import {
 import {
     Banner,
     Field,
-    IconButton,
     LinkButton,
     Panel,
     PriorityPill,
@@ -31,13 +29,11 @@ import {
     currency,
     cx,
     input,
-    inputCls,
     textareaCls,
 } from '@/Components/ui/kit';
 
-// category_id is only used to narrow the Item dropdown; the server saves item_variant_id, quantity and unit_price.
+// The server saves item_variant_id, quantity and unit_price (item_id / item_brand_id only drive the dropdowns).
 // unit_price is typed by the user for every line (variants no longer carry a price).
-const emptyItem = () => ({ item_id: '', item_brand_id: '', item_variant_id: '', quantity: 1, unit_price: '' });
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
@@ -47,7 +43,7 @@ const emptyForm = () => ({
     client_contact_person_id: '',
     priority: 'Medium',
     winning_message: '',
-    items: [emptyItem()],
+    items: linesFromServer([], 'unit_price'), // one blank line
     remarks: '',
     prepared_by: '',
     prepared_by_position: '',
@@ -119,13 +115,7 @@ const NEW_CONTACT_FIELDS = [
 /** QT-2026-00012-3 -> QT-2026-00012 */
 const baseNumber = (n) => String(n ?? '').match(/^(QT-\d{4}-\d+)(?:-\d+)?$/)?.[1] ?? n;
 
-const variantLabel = (v) => [v.unit_of_measure, v.size].filter(Boolean).join(' · ');
-
-const rowGrid = 'lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1.5fr)_84px_116px_108px_32px]';
-const mobileLabel = 'mb-1 block text-xs font-medium text-slate-500 lg:hidden';
-
 // Typed numbers only: no spinner arrows, no mouse-wheel or arrow-key changes.
-const intOnly = (v) => String(v).replace(/\D/g, '');
 const decimalOnly = (v) => {
     const [whole, ...rest] = String(v).replace(/[^\d.]/g, '').split('.');
     return rest.length ? `${whole}.${rest.join('').slice(0, 2)}` : whole;
@@ -172,7 +162,6 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
     const [quickErrors, setQuickErrors] = useState({});
     const [quickMessage, setQuickMessage] = useState(null); // non-validation failures (network, 500, expired session)
     const [quickProcessing, setQuickProcessing] = useState(false);
-    const [categoryFilter, setCategoryFilter] = useState('');
     const [showAddress, setShowAddress] = useState(false);
 
     const initialData = transaction
@@ -182,16 +171,7 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
               client_contact_person_id: transaction.client_contact_person_id ?? transaction.contact_person?.id ?? '',
               priority: transaction.priority ?? 'Medium',
               winning_message: transaction.winning_message ?? '',
-              items:
-                  transaction.items?.length > 0
-                      ? transaction.items.map((i) => ({
-                            item_id: i.variant?.brand?.item_id ?? '',
-                            item_brand_id: i.variant?.brand?.id ?? '',
-                            item_variant_id: i.item_variant_id ?? '',
-                            quantity: i.quantity ?? 1,
-                            unit_price: i.unit_price ?? '',
-                        }))
-                      : [emptyItem()],
+              items: linesFromServer(transaction.items, 'unit_price'),
               remarks: transaction.remarks ?? '',
               prepared_by: transaction.prepared_by ?? currentUser.name ?? '',
               prepared_by_position: transaction.prepared_by_position ?? currentUser.position ?? '',
@@ -205,7 +185,7 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
           };
 
     const { data, setData, post, put, processing, errors, clearErrors } = useForm(initialData);
-    const items = data.items ?? [emptyItem()];
+    const items = data.items ?? linesFromServer([], 'unit_price');
 
     useEffect(() => setClientList(clients), [clients]);
 
@@ -216,20 +196,6 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
     useEffect(() => setShowAddress(false), [selectedClient?.id]);
     const contactOptions = selectedClient?.contact_people ?? [];
     const selectedContact = contactOptions.find((c) => String(c.id) === String(data.client_contact_person_id));
-
-    // ---- catalog lookups ----
-    const categories = useMemo(() => {
-        const map = new Map();
-        catalog.forEach((i) => i.category && map.set(i.category.id, i.category));
-        return [...map.values()].sort((a, b) => a.category_name.localeCompare(b.category_name));
-    }, [catalog]);
-
-    const itemsFor = () =>
-        catalog.filter((i) => !categoryFilter || String(i.item_category_id) === String(categoryFilter));
-    const brandsFor = (row) => catalog.find((i) => String(i.id) === String(row.item_id))?.brands ?? [];
-    const variantsFor = (row) =>
-        brandsFor(row).find((b) => String(b.id) === String(row.item_brand_id))?.variants ?? [];
-    const variantFor = (row) => variantsFor(row).find((v) => String(v.id) === String(row.item_variant_id));
 
     // ---- totals: subtotal → markup → VAT → grand total ----
     const subtotal = useMemo(
@@ -242,10 +208,8 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
     const total = round2(net + vatAmount);
 
     // ---- delivery progress (locked orders) ----
-    const deliveredAt = (index) => Number(transaction?.items?.[index]?.delivered_quantity ?? 0);
-    const orderedDelivered = itemsLocked
-        ? (transaction?.items ?? []).reduce((s, l) => s + Number(l.delivered_quantity ?? 0), 0)
-        : 0;
+    const deliveredPerLine = itemsLocked ? (transaction?.items ?? []).map((l) => Number(l.delivered_quantity ?? 0)) : null;
+    const orderedDelivered = itemsLocked ? deliveredPerLine.reduce((s, n) => s + n, 0) : 0;
     const orderedTotal = itemsLocked ? (transaction?.items ?? []).reduce((s, l) => s + Number(l.quantity ?? 0), 0) : 0;
 
     // Two rows can share a variant, so add them up before comparing with stock.
@@ -263,28 +227,9 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
             .filter(Boolean);
     }, [items, catalog, itemsLocked]);
 
-    // Lines that pick the same variant (so the same item and brand too) as another line.
-    // The lines are kept and flagged, and saving is blocked until they are fixed:
-    // { lineIndex: [other line numbers] }.
-    // The same item with a different variant is fine.
-    const duplicateOf = useMemo(() => {
-        const byVariant = {};
-        items.forEach((r, i) => {
-            if (!r.item_variant_id) return;
-            const key = String(r.item_variant_id);
-            byVariant[key] = [...(byVariant[key] ?? []), i];
-        });
-
-        const out = {};
-        Object.values(byVariant).forEach((idxs) => {
-            if (idxs.length < 2) return;
-            idxs.forEach((i) => {
-                out[i] = idxs.filter((x) => x !== i).map((x) => x + 1);
-            });
-        });
-        return out;
-    }, [items]);
-    const duplicateCount = itemsLocked ? 0 : Object.keys(duplicateOf).length;
+    // Lines that pick the same variant as another line. Saving is blocked until they are fixed.
+    // (The rows themselves are flagged inside LineItemsEditor.)
+    const duplicateCount = itemsLocked ? 0 : duplicateLineCount(items);
 
     // ---- form helpers ----
     const updateField = (field, value) => {
@@ -296,23 +241,6 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
         setData((prev) => ({ ...prev, client_id: value, client_contact_person_id: '' }));
         clearErrors('client_id');
     };
-
-    const patchItem = (index, patch) => {
-        if (itemsLocked) return;
-        setData('items', items.map((it, i) => (i === index ? { ...it, ...patch } : it)));
-    };
-    const changeItem = (i, v) => patchItem(i, { item_id: v, item_brand_id: '', item_variant_id: '' });
-    const changeBrand = (i, v) => patchItem(i, { item_brand_id: v, item_variant_id: '' });
-    const changeVariant = (i, variantId) => {
-        patchItem(i, { item_variant_id: variantId });
-        clearErrors(`items.${i}.item_variant_id`);
-    };
-    const updateItem = (i, field, value) => {
-        patchItem(i, { [field]: value });
-        if (String(value).trim() !== '') clearErrors(`items.${i}.${field}`);
-    };
-    const addItem = () => !itemsLocked && setData('items', [...items, emptyItem()]);
-    const removeItem = (i) => !itemsLocked && setData('items', items.filter((_, idx) => idx !== i));
 
     // ---- quick add ----
     const toggleAddClient = () => {
@@ -590,220 +518,33 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                         </div>
                     </Panel>
 
-                    <Panel
+                    {/* The shared item table */}
+                    <LineItemsEditor
+                        items={items}
+                        onChange={(v) => setData('items', v)}
+                        catalog={catalog}
+                        errors={errors}
+                        clearErrors={clearErrors}
+                        priceField="unit_price"
+                        priceLabel="Unit price"
                         title="Line items"
                         description={
                             itemsLocked
                                 ? 'Locked because deliveries have been recorded.'
                                 : 'Pick an item, brand and variant, then enter the quantity and unit price.'
                         }
-                        icon={Package}
-                        bodyClass="p-0"
-                        actions={
-                            !itemsLocked && (
-                                <select
-                                    aria-label="Filter items by category"
-                                    value={categoryFilter}
-                                    onChange={(e) => setCategoryFilter(e.target.value)}
-                                    className={cx(inputCls, 'h-8 w-44 text-[13px]')}
-                                >
-                                    <option value="">All categories</option>
-                                    {categories.map((c) => (
-                                        <option key={c.id} value={c.id}>{c.category_name}</option>
-                                    ))}
-                                </select>
-                            )
-                        }
-                    >
-                        {itemsLocked && (
-                            <div className="p-4 pb-0">
+                        locked={itemsLocked}
+                        delivered={deliveredPerLine}
+                        notice={
+                            itemsLocked ? (
                                 <Banner tone="warning" icon={Lock} title={`Items are locked (${orderedDelivered} of ${orderedTotal} delivered)`}>
                                     Items, quantities and prices can't change once goods are delivered, because that would break the
                                     delivery and stock records. You can still edit the client, priority and remarks. If the order really
                                     changed, mark this deal as lost and create a new transaction.
                                 </Banner>
-                            </div>
-                        )}
-
-                        {catalog.length === 0 && !itemsLocked && (
-                            <p className="px-5 py-4 text-sm text-slate-500">
-                                No items in the catalog yet.{' '}
-                                <Link href={route('items.create')} className="font-medium text-[#667292] underline">
-                                    Create one first
-                                </Link>
-                            </p>
-                        )}
-
-                        {typeof errors.items === 'string' && <p className="px-5 pt-3 text-xs text-red-600">{errors.items}</p>}
-
-                        {/* Column headers (desktop) */}
-                        <div className={cx('mt-4 hidden gap-3 border-y border-slate-100 bg-slate-50 px-5 py-2 text-xs font-medium text-slate-500 lg:grid', rowGrid)}>
-                            <span>Item</span>
-                            <span>Brand</span>
-                            <span>Variant</span>
-                            <span>Qty</span>
-                            <span>Unit price</span>
-                            <span className="text-right">Subtotal</span>
-                            <span />
-                        </div>
-
-                        <div className="divide-y divide-slate-100">
-                            {items.map((item, index) => {
-                                const lineTotal = (Number(item.quantity) || 0) * (Number(item.unit_price) || 0);
-                                const selectedVariant = variantFor(item);
-                                const over = !itemsLocked && selectedVariant && Number(item.quantity) > Number(selectedVariant.stock);
-                                const variantError = errors[`items.${index}.item_variant_id`];
-                                const lineDelivered = deliveredAt(index);
-                                const isDuplicate = !itemsLocked && Boolean(duplicateOf[index]);
-
-                                return (
-                                    <div
-                                        key={index}
-                                        className={cx(
-                                            'grid grid-cols-1 gap-3 px-5 py-3.5 lg:items-start',
-                                            rowGrid,
-                                            isDuplicate && 'bg-amber-50/70',
-                                        )}
-                                    >
-                                        <div>
-                                            <span className={mobileLabel}>Item</span>
-                                            <SearchSelect
-                                                ariaLabel="Item"
-                                                placeholder="Select item"
-                                                searchPlaceholder="Type an item name"
-                                                emptyText="No items found"
-                                                options={itemsFor().map((i) => ({ value: i.id, label: i.item_name }))}
-                                                value={item.item_id}
-                                                onChange={(v) => changeItem(index, v)}
-                                                disabled={itemsLocked}
-                                                inputClassName={input(variantError && !item.item_id)}
-                                            />
-                                        </div>
-
-                                        <div>
-                                            <span className={mobileLabel}>Brand</span>
-                                            <SearchSelect
-                                                ariaLabel="Brand"
-                                                placeholder={item.item_id ? 'Select brand' : '—'}
-                                                searchPlaceholder="Type a brand"
-                                                emptyText="No brands found"
-                                                options={brandsFor(item).map((b) => ({ value: b.id, label: b.brand_name }))}
-                                                value={item.item_brand_id}
-                                                onChange={(v) => changeBrand(index, v)}
-                                                disabled={itemsLocked || !item.item_id}
-                                                inputClassName={input(variantError && item.item_id && !item.item_brand_id)}
-                                            />
-                                        </div>
-
-                                        <div>
-                                            <span className={mobileLabel}>Variant</span>
-                                            <SearchSelect
-                                                ariaLabel="Variant"
-                                                placeholder={item.item_brand_id ? 'Select variant' : '—'}
-                                                searchPlaceholder="Type a size or unit"
-                                                emptyText="No variants found"
-                                                options={variantsFor(item).map((v) => ({
-                                                    value: v.id,
-                                                    label: variantLabel(v),
-                                                    hint: `${v.stock} in stock`,
-                                                }))}
-                                                value={item.item_variant_id}
-                                                onChange={(v) => changeVariant(index, v)}
-                                                disabled={itemsLocked || !item.item_brand_id}
-                                                inputClassName={cx(
-                                                    input(variantError),
-                                                    isDuplicate && '!border-amber-500 !bg-amber-50 focus:!border-amber-600',
-                                                )}
-                                            />
-                                            {variantError && <p className="mt-1 text-xs text-red-600">Select an item, brand and variant.</p>}
-                                            {itemsLocked ? (
-                                                <p className={cx('mt-1 text-xs', lineDelivered >= Number(item.quantity) ? 'text-emerald-600' : 'text-slate-500')}>
-                                                    Delivered {lineDelivered} of {item.quantity}
-                                                </p>
-                                            ) : (
-                                                selectedVariant && (
-                                                    <p className={cx('mt-1 text-xs', over ? 'font-medium text-orange-600' : 'text-slate-500')}>
-                                                        {over ? `Only ${selectedVariant.stock} in stock` : `${selectedVariant.stock} in stock`}
-                                                    </p>
-                                                )
-                                            )}
-                                            {isDuplicate && (
-                                                <p className="mt-1 flex items-start gap-1 text-xs font-medium text-amber-700">
-                                                    <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
-                                                    <span>
-                                                        Same item and variant as line {duplicateOf[index].join(', ')}. Choose a different
-                                                        variant, or remove one of the lines, before saving.
-                                                    </span>
-                                                </p>
-                                            )}
-                                        </div>
-
-                                        <div>
-                                            <span className={mobileLabel}>Qty</span>
-                                            <input
-                                                type="text"
-                                                inputMode="numeric"
-                                                value={item.quantity}
-                                                onChange={(e) => updateItem(index, 'quantity', intOnly(e.target.value))}
-                                                disabled={itemsLocked}
-                                                aria-label="Quantity"
-                                                className={input(errors[`items.${index}.quantity`])}
-                                            />
-                                            {errors[`items.${index}.quantity`] && (
-                                                <p className="mt-1 text-xs text-red-600">{errors[`items.${index}.quantity`]}</p>
-                                            )}
-                                        </div>
-
-                                        <div>
-                                            <span className={mobileLabel}>Unit price</span>
-                                            <input
-                                                type="text"
-                                                inputMode="decimal"
-                                                placeholder="0.00"
-                                                value={item.unit_price}
-                                                onChange={(e) => updateItem(index, 'unit_price', decimalOnly(e.target.value))}
-                                                disabled={itemsLocked}
-                                                aria-label="Unit price"
-                                                className={input(errors[`items.${index}.unit_price`])}
-                                            />
-                                            {errors[`items.${index}.unit_price`] && (
-                                                <p className="mt-1 text-xs text-red-600">{errors[`items.${index}.unit_price`]}</p>
-                                            )}
-                                        </div>
-
-                                        <div className="flex items-center justify-between lg:h-9 lg:justify-end">
-                                            <span className={cx(mobileLabel, 'mb-0')}>Subtotal</span>
-                                            <span className="text-sm font-semibold tabular-nums text-slate-900">{currency(lineTotal)}</span>
-                                        </div>
-
-                                        <div className="flex justify-end lg:h-9 lg:items-center">
-                                            {itemsLocked ? (
-                                                <Lock className="h-4 w-4 text-slate-300" aria-label="Locked" />
-                                            ) : (
-                                                items.length > 1 && <IconButton icon={Trash2} label="Remove item" danger onClick={() => removeItem(index)} />
-                                            )}
-                                        </div>
-                                    </div>
-                                );
-                            })}
-                        </div>
-
-                        {/* Bottom row: Add item on the left, subtotal on the right */}
-                        <div className="flex items-center justify-between gap-3 border-t border-slate-100 bg-slate-50 px-5 py-3 text-sm">
-                            {itemsLocked ? (
-                                <span />
-                            ) : (
-                                <Button type="button" variant="outline" onClick={addItem}>
-                                    <Plus />
-                                    Add item
-                                </Button>
-                            )}
-                            <div className="flex items-center gap-3">
-                                <span className="text-slate-500">Subtotal</span>
-                                <span className="text-base font-semibold tabular-nums text-slate-900">{currency(subtotal)}</span>
-                            </div>
-                        </div>
-                    </Panel>
+                            ) : null
+                        }
+                    />
 
                     <Panel
                         title="Markup & VAT"

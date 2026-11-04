@@ -50,23 +50,39 @@ class PipelineStage extends Model
     {
         // Every stage always has its own permission.
         static::saved(function (PipelineStage $stage) {
-            $old = $stage->getOriginal('stage_code');
+            $registrar = app(PermissionRegistrar::class);
+            $old       = $stage->getOriginal('stage_code');
+            $new       = $stage->permissionName();
 
             // Stage code renamed: rename the permission so roles keep it.
             if ($old && $old !== $stage->stage_code) {
-                Permission::where('name', static::permissionFor($old))
-                    ->where('guard_name', 'web')
-                    ->update(['name' => $stage->permissionName()]);
+                $oldName = static::permissionFor($old);
+
+                // Skip the rename if the new name already exists (it would violate the unique key).
+                $newExists = Permission::where('name', $new)->where('guard_name', 'web')->exists();
+
+                if (! $newExists) {
+                    Permission::where('name', $oldName)
+                        ->where('guard_name', 'web')
+                        ->update(['name' => $new]);
+                }
+
+                // The rename is a raw update, so Spatie's cache is now stale.
+                // Clear it BEFORE looking the permission up again.
+                $registrar->forgetCachedPermissions();
             }
 
-            Permission::findOrCreate($stage->permissionName(), 'web');
-            app(PermissionRegistrar::class)->forgetCachedPermissions();
+            // Query the database directly instead of Spatie's cached lookup (findOrCreate).
+            Permission::firstOrCreate(['name' => $new, 'guard_name' => 'web']);
+
+            $registrar->forgetCachedPermissions();
         });
 
         static::deleted(function (PipelineStage $stage) {
             Permission::where('name', $stage->permissionName())
                 ->where('guard_name', 'web')
                 ->delete();
+
             app(PermissionRegistrar::class)->forgetCachedPermissions();
         });
     }

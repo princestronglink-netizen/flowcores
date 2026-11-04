@@ -4,12 +4,19 @@ namespace App\Http\Controllers;
 
 use App\Models\StockMovement;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Gate;
 use Inertia\Inertia;
 
+/**
+ * PERMISSIONS (StockMovementPolicy):
+ *   index -> viewAny (stock.ledger)
+ */
 class StockMovementController extends Controller
 {
     public function index(Request $request)
     {
+        Gate::authorize('viewAny', StockMovement::class);
+
         $movements = StockMovement::with(['variant.brand.item', 'user:id,name', 'transaction:id,name'])
             ->when($request->filled('type'), fn ($q) => $q->where('type', $request->string('type')))
             ->when($request->filled('search'), function ($q) use ($request) {

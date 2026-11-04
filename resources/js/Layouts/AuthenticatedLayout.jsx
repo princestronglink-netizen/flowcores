@@ -30,20 +30,20 @@ const navGroups = [
         label: 'Workspace',
         items: [
             { name: 'Dashboard', route: 'dashboard.index', icon: LayoutGrid },
-            { name: 'Quotations', route: 'quotations.index', icon: FileText },
-            { name: 'Client POs', route: 'client-purchase-orders.index', icon: ClipboardList },
-            { name: 'Transactions', route: 'transactions.index', icon: Receipt },
+            { name: 'Quotations', route: 'quotations.index', icon: FileText, needs: 'view_quotations' },
+            { name: 'Client POs', route: 'client-purchase-orders.index', icon: ClipboardList, needs: 'view_client_pos' },
+            { name: 'Transactions', route: 'transactions.index', icon: Receipt, needs: 'view_transactions' },
             { name: 'Pipelines', route: 'pipelines.index', icon: GitBranch, needs: 'view_pipeline' },
-            { name: 'Clients', route: 'clients.index', icon: Building2 },
+            { name: 'Clients', route: 'clients.index', icon: Building2, needs: 'view_clients' },
         ],
     },
     {
         label: 'Inventory',
         items: [
-            { name: 'Items', route: 'items.index', icon: Package },
-            { name: 'Categories', route: 'categories.index', icon: Tags },
-            { name: 'Stock in', route: 'stock-in.index', icon: PackagePlus },
-            { name: 'Stock ledger', route: 'stock-movements.index', icon: ScrollText },
+            { name: 'Items', route: 'items.index', icon: Package, needs: 'view_items' },
+            { name: 'Categories', route: 'categories.index', icon: Tags, needs: 'view_categories' },
+            { name: 'Stock in', route: 'stock-in.index', icon: PackagePlus, needs: 'stock_in' },
+            { name: 'Stock ledger', route: 'stock-movements.index', icon: ScrollText, needs: 'view_stock_ledger' },
         ],
     },
     {

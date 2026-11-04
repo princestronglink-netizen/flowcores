@@ -15,23 +15,50 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Inertia\Inertia;
 
+/**
+ * PERMISSIONS (TransactionPolicy):
+ *   index            -> viewAny  (transaction.view)
+ *   create / store   -> create   (transaction.create)
+ *   edit / update    -> update   (transaction.edit)
+ *   destroy          -> delete   (transaction.delete)
+ *   updateStage      -> moveToStage (one permission per pipeline stage)
+ *   updateStatus     -> deal.won / deal.lost
+ * Prices are only sent to users with amounts.view.
+ */
 class TransactionController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
+        Gate::authorize('viewAny', Transaction::class);
+
+        $transactions = Transaction::with([
+            'client',
+            'contactPerson',
+            'pipeline',
+            'stage', // the pipeline stage each transaction is currently in
+            'items',
+        ])->latest()->get();
+
+        // No amounts.view = the prices never leave the server.
+        if (! $request->user()->can('amounts.view')) {
+            $transactions->each(function ($t) {
+                $t->makeHidden([
+                    'amount', 'subtotal', 'markup_percent', 'markup_amount',
+                    'vat_percent', 'vat_amount', 'total',
+                ]);
+                $t->items->each->makeHidden(['unit_price', 'subtotal', 'line_total']);
+            });
+        }
+
         return Inertia::render('Transaction/Index', [
-            'transactions' => Transaction::with([
-                'client',
-                'contactPerson',
-                'pipeline',
-                'stage', // the pipeline stage each transaction is currently in
-                'items',
-            ])->latest()->get(),
+            'transactions' => $transactions,
         ]);
     }
 
     public function create()
     {
+        Gate::authorize('create', Transaction::class);
+
         return Inertia::render('Transaction/Create', [
             'clients' => Client::with('contactPeople')->orderBy('client_name')->get(),
             'catalog' => $this->catalog(),
@@ -40,6 +67,8 @@ class TransactionController extends Controller
 
     public function edit(Transaction $transaction)
     {
+        Gate::authorize('update', $transaction);
+
         $transaction->load([
             'client',
             'contactPerson',
@@ -135,6 +164,8 @@ class TransactionController extends Controller
 
     public function store(Request $request)
     {
+        Gate::authorize('create', Transaction::class);
+
         $validated = $request->validate($this->transactionRules());
 
         $pipeline     = Pipeline::default();
@@ -197,6 +228,8 @@ class TransactionController extends Controller
 
     public function update(Request $request, Transaction $transaction)
     {
+        Gate::authorize('update', $transaction);
+
         $validated = $request->validate($this->transactionRules());
         $itemRows  = $this->buildItemRows($validated['items']);
 
@@ -312,6 +345,8 @@ class TransactionController extends Controller
     /** Delivery records are never wiped: goods that are still out must be returned first. */
     public function destroy(Transaction $transaction)
     {
+        Gate::authorize('delete', $transaction);
+
         if ($transaction->hasDeliveredItems()) {
             return back()->withErrors([
                 'delete' => 'Items from this transaction are still delivered. Return them first (or mark the deal as lost) before deleting.',
@@ -330,6 +365,16 @@ class TransactionController extends Controller
             'restock' => 'nullable|boolean',
             'reason'  => 'nullable|string|in:' . implode(',', array_keys(Delivery::RETURN_REASONS)),
         ]);
+
+        // Permission: deal.won = Done Deal, deal.lost = Lost Deal.
+        // Checked first, before anything touches stock or status.
+        if (! $request->user()->can("deal.{$validated['status']}")) {
+            return back()->withErrors([
+                'status' => $validated['status'] === 'won'
+                    ? "You don't have permission to mark deals as Done."
+                    : "You don't have permission to mark deals as Lost.",
+            ]);
+        }
 
         $restock = $request->boolean('restock', true);
 

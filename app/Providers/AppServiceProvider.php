@@ -4,9 +4,11 @@ namespace App\Providers;
 
 use App\Models\Pipeline;
 use App\Models\PipelineStage;
+use App\Models\StockMovement;
 use App\Models\Transaction;
 use App\Policies\PipelinePolicy;
 use App\Policies\PipelineStagePolicy;
+use App\Policies\StockMovementPolicy;
 use App\Policies\TransactionPolicy;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Vite;
@@ -21,5 +23,6 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(Pipeline::class, PipelinePolicy::class);
         Gate::policy(PipelineStage::class, PipelineStagePolicy::class);
         Gate::policy(Transaction::class, TransactionPolicy::class);
+        Gate::policy(StockMovement::class, StockMovementPolicy::class);
     }
 }

@@ -10,9 +10,20 @@ const formatDate = (value) =>
 
 const baseNumber = (n) => String(n ?? '').match(/^(QT-\d{4}-\d+)(?:-\d+)?$/)?.[1] ?? n;
 
-/** Quotation versions of this transaction. Only shown once the quotation has been issued. */
+/**
+ * Quotation versions of this transaction. Only shown once the quotation has been issued.
+ *
+ * PERMISSION (the server checks these again):
+ *   print_quotation  quotation.view + amounts.view -> Print links
+ *   edit_quotation   quotation.edit                -> Restore buttons (passed in as canRestore)
+ *   view_amounts     amounts.view                  -> amounts
+ */
 function VersionHistory({ transaction, versions, canRestore }) {
-    const { errors } = usePage().props;
+    const { errors, auth } = usePage().props;
+    const can = auth?.can ?? {};
+    const canPrint = Boolean(can.print_quotation);
+    const canViewAmounts = Boolean(can.view_amounts);
+
     const nextNumber = `${baseNumber(transaction.quotation_number)}-${(transaction.version ?? 0) + 1}`;
 
     const restore = (v) => {
@@ -65,15 +76,19 @@ function VersionHistory({ transaction, versions, canRestore }) {
                             </p>
                         </div>
                         <div className="flex items-center gap-4">
-                            <span className="text-sm font-semibold tabular-nums text-slate-900">{currency(transaction.amount)}</span>
-                            <a
-                                href={route('transactions.quotation.print', transaction.id)}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="inline-flex items-center gap-1 text-xs font-medium text-[#667292] hover:underline"
-                            >
-                                <Printer className="h-3.5 w-3.5" /> Print
-                            </a>
+                            {canViewAmounts && (
+                                <span className="text-sm font-semibold tabular-nums text-slate-900">{currency(transaction.amount)}</span>
+                            )}
+                            {canPrint && (
+                                <a
+                                    href={route('transactions.quotation.print', transaction.id)}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="inline-flex items-center gap-1 text-xs font-medium text-[#667292] hover:underline"
+                                >
+                                    <Printer className="h-3.5 w-3.5" /> Print
+                                </a>
+                            )}
                         </div>
                     </li>
 
@@ -93,15 +108,19 @@ function VersionHistory({ transaction, versions, canRestore }) {
                                 </p>
                             </div>
                             <div className="flex items-center gap-4">
-                                <span className="text-sm font-semibold tabular-nums text-slate-700">{currency(v.amount)}</span>
-                                <a
-                                    href={route('transactions.versions.print', { transaction: transaction.id, version: v.id })}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="inline-flex items-center gap-1 text-xs font-medium text-[#667292] hover:underline"
-                                >
-                                    <Printer className="h-3.5 w-3.5" /> Print
-                                </a>
+                                {canViewAmounts && (
+                                    <span className="text-sm font-semibold tabular-nums text-slate-700">{currency(v.amount)}</span>
+                                )}
+                                {canPrint && (
+                                    <a
+                                        href={route('transactions.versions.print', { transaction: transaction.id, version: v.id })}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="inline-flex items-center gap-1 text-xs font-medium text-[#667292] hover:underline"
+                                    >
+                                        <Printer className="h-3.5 w-3.5" /> Print
+                                    </a>
+                                )}
                                 {canRestore && (
                                     <button
                                         type="button"
@@ -130,6 +149,8 @@ function VersionHistory({ transaction, versions, canRestore }) {
 }
 
 export default function Edit({ transaction, clients, catalog, itemsLocked = false, versions = [] }) {
+    const can = usePage().props.auth?.can ?? {};
+
     return (
         <AuthenticatedLayout
             header={<PageHeading title="Edit Transaction" subtitle="Update transaction details." />}
@@ -145,7 +166,7 @@ export default function Edit({ transaction, clients, catalog, itemsLocked = fals
                 <VersionHistory
                     transaction={transaction}
                     versions={versions}
-                    canRestore={!transaction.quotation_frozen && !itemsLocked}
+                    canRestore={!transaction.quotation_frozen && !itemsLocked && Boolean(can.edit_quotation)}
                 />
             )}
         </AuthenticatedLayout>

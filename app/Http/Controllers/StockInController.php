@@ -7,12 +7,20 @@ use App\Models\StockMovement;
 use App\Models\StockReceipt;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
 use Inertia\Inertia;
 
+/**
+ * PERMISSIONS (StockMovementPolicy):
+ *   index        -> stockIn (stock.in)
+ *   store        -> stockIn (stock.in)
+ */
 class StockInController extends Controller
 {
     public function index()
     {
+        Gate::authorize('stockIn', StockMovement::class);
+
         return Inertia::render('Stock/In', [
             'variants' => $this->variantOptions(),
             'receipts' => StockReceipt::with(['items.variant.brand.item', 'user:id,name'])
@@ -26,6 +34,8 @@ class StockInController extends Controller
     /** Receive stock: one receipt, many lines. All or nothing, every line goes to the ledger. */
     public function store(Request $request)
     {
+        Gate::authorize('stockIn', StockMovement::class);
+
         $validated = $request->validate([
             'supplier'                => 'nullable|string|max:120',
             'reference'               => 'nullable|string|max:120',

@@ -53,6 +53,17 @@ export default function Index({ pipelines = [] }) {
     // PERMISSION: can this user see money amounts? (completion checks that compare amounts are skipped without it)
     const canViewAmounts = Boolean(auth?.can?.view_amounts);
 
+    // PERMISSION: who may close a deal as Done / Lost (the server checks this again)
+    const canMarkDone = Boolean(auth?.can?.mark_done);
+    const canMarkLost = Boolean(auth?.can?.mark_lost);
+
+    // PERMISSION: who may record deliveries / returns (the server checks this again)
+    const canRecordDelivery = Boolean(auth?.can?.record_delivery);
+    const canRecordReturn = Boolean(auth?.can?.record_return);
+
+    // PERMISSION: who may open the printable quotation (the server checks this again)
+    const canPrintQuotation = Boolean(auth?.can?.print_quotation);
+
     const [isOpen, setIsOpen] = useState(false);
     const [editingPipeline, setEditingPipeline] = useState(null);
     const [deletingPipeline, setDeletingPipeline] = useState(null);
@@ -139,9 +150,18 @@ export default function Index({ pipelines = [] }) {
             ? stages[deliveryIndex].stage_name
             : null;
 
+    // PERMISSION: the one place that opens the delivery modal.
+    // Users without record_delivery / record_return never get the form (the server checks this again).
+    // 'history' is read-only, so it is always allowed.
+    const openDelivery = (id, mode) => {
+        if (mode === 'deliver' && !canRecordDelivery) return;
+        if (mode === 'return' && !canRecordReturn) return;
+        setDelivery({ id, mode });
+    };
+
     // Stages can't be skipped: while dragging, only the neighbouring stages accept a drop.
     // Transactions can finish only from the final stage. Quotations and POs can finish from any stage.
-    // "Lost Deal" is always allowed. Quotations and POs can't enter the delivery stage.
+    // "Lost Deal" is always allowed (if the user has the permission). Quotations and POs can't enter the delivery stage.
     const activeIndex = stages.findIndex((s) => s.id === activeStageId);
     const isAllowedStage = (index) => {
         if (activeIndex === -1) return true;
@@ -189,6 +209,16 @@ export default function Index({ pipelines = [] }) {
         const sourceIndex = stages.findIndex((s) => s.id === sourceStage.id);
         const { ordered, delivered } = deliveryTotals(transaction);
 
+        // PERMISSION: ignore Done / Lost drops the user isn't allowed to make (the server checks this again)
+        if (overId === 'done' && !canMarkDone) {
+            setNotice("You don't have permission to mark deals as Done.");
+            return;
+        }
+        if (overId === 'lost' && !canMarkLost) {
+            setNotice("You don't have permission to mark deals as Lost.");
+            return;
+        }
+
         // ---- Done / Lost ----
         if (overId === 'done' && isTx && sourceIndex !== stages.length - 1) return;
 
@@ -203,6 +233,7 @@ export default function Index({ pipelines = [] }) {
                           needPo: stages.some((s) => s.creates_client_po),
                           needDelivery: deliveryIndex >= 0,
                           checkAmounts: canViewAmounts,
+                          canPrint: canPrintQuotation,
                       })
                     : null;
 
@@ -350,8 +381,9 @@ export default function Index({ pipelines = [] }) {
                         stages.findIndex((s) => s.id === sourceStage.id);
 
                     if (targetStage.deducts_stock) {
-                        // Moved into the delivery stage: open the delivery modal for convenience.
-                        setDelivery({ id: transaction.id, mode: 'deliver' });
+                        // Moved into the delivery stage: open the delivery modal for convenience,
+                        // but only for users who may record deliveries (openDelivery checks this).
+                        openDelivery(transaction.id, 'deliver');
                     } else if (movedForward && (targetStage.creates_quotation || targetStage.creates_client_po)) {
                         // Moved forward into a quotation / client PO stage: open the card details,
                         // which already show the generated quotation and client PO (with Confirm and Edit).
@@ -445,15 +477,23 @@ export default function Index({ pipelines = [] }) {
                                         accent={stageAccents[index % stageAccents.length]}
                                         disabled={!isAllowedStage(index)}
                                         showDelivery={deliveryIndex >= 0 && index >= deliveryIndex}
-                                        onDeliveryAction={(t, mode) => setDelivery({ id: t.id, mode })}
+                                        onDeliveryAction={(t, mode) => openDelivery(t.id, mode)}
                                         onOpen={(card) => setViewingKey(cardKey(card))}
                                     />
                                 ))}
                             </div>
 
                             <div className="grid shrink-0 grid-cols-1 gap-3 sm:grid-cols-2">
-                                <DealDropZone variant="done" count={selectedPipeline?.won_count ?? 0} disabled={!canFinish} />
-                                <DealDropZone variant="lost" count={selectedPipeline?.lost_count ?? 0} />
+                                <DealDropZone
+                                    variant="done"
+                                    count={selectedPipeline?.won_count ?? 0}
+                                    disabled={!canFinish || !canMarkDone}
+                                />
+                                <DealDropZone
+                                    variant="lost"
+                                    count={selectedPipeline?.lost_count ?? 0}
+                                    disabled={!canMarkLost}
+                                />
                             </div>
 
                             <DragOverlay>{activeItem && <OverlayCard item={activeItem} />}</DragOverlay>

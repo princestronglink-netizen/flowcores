@@ -7,6 +7,7 @@ use App\Models\ItemVariant;
 use App\Models\StockMovement;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
@@ -16,11 +17,17 @@ use Inertia\Inertia;
  * (miscount, damage found in a count, etc.).
  * One submit = one action + one reason + many lines, all or nothing,
  * every line goes to the stock ledger.
+ *
+ * PERMISSIONS (StockMovementPolicy):
+ *   index        -> adjust (stock.adjust)
+ *   store        -> adjust (stock.adjust)
  */
 class StockAdjustController extends Controller
 {
     public function index(Request $request)
     {
+        Gate::authorize('adjust', StockMovement::class);
+
         return Inertia::render('Stock/Adjust', [
             'variants'  => $this->variantOptions(),
             'recent'    => StockMovement::with(['variant.brand.item', 'user:id,name'])
@@ -35,6 +42,8 @@ class StockAdjustController extends Controller
 
     public function store(Request $request)
     {
+        Gate::authorize('adjust', StockMovement::class);
+
         $validated = $request->validate([
             'direction'               => ['required', Rule::in(['in', 'out'])],
             'reason'                  => ['required', Rule::in(array_keys(

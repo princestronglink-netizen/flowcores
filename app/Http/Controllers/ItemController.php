@@ -7,12 +7,22 @@ use App\Models\ItemCategory;
 use App\Models\StockMovement;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
 use Inertia\Inertia;
 
+/**
+ * PERMISSIONS (ItemPolicy):
+ *   index            -> viewAny (item.view)
+ *   create / store   -> create  (item.create)
+ *   edit / update    -> update  (item.edit)
+ *   destroy          -> delete  (item.delete)
+ */
 class ItemController extends Controller
 {
     public function index()
     {
+        Gate::authorize('viewAny', Item::class);
+
         return Inertia::render('Item/Index', [
             'items' => Item::with([
                 'category',
@@ -24,6 +34,8 @@ class ItemController extends Controller
 
     public function create()
     {
+        Gate::authorize('create', Item::class);
+
         return Inertia::render('Item/Create', [
             'categories' => ItemCategory::orderBy('category_name')->get(['id', 'category_name']),
         ]);
@@ -31,6 +43,8 @@ class ItemController extends Controller
 
     public function edit(Item $item)
     {
+        Gate::authorize('update', $item);
+
         return Inertia::render('Item/Edit', [
             'item'       => $item->load(['brands.variants' => fn ($q) => $q->withDemand()]),
             'categories' => ItemCategory::orderBy('category_name')->get(['id', 'category_name']),
@@ -58,6 +72,8 @@ class ItemController extends Controller
 
     public function store(Request $request)
     {
+        Gate::authorize('create', Item::class);
+
         $validated = $request->validate($this->rules());
 
         DB::transaction(function () use ($validated) {
@@ -75,6 +91,8 @@ class ItemController extends Controller
 
     public function update(Request $request, Item $item)
     {
+        Gate::authorize('update', $item);
+
         $validated = $request->validate($this->rules());
 
         DB::transaction(function () use ($validated, $item) {
@@ -92,6 +110,8 @@ class ItemController extends Controller
 
     public function destroy(Item $item)
     {
+        Gate::authorize('delete', $item);
+
         // Fails if any variant is used in a transaction (restrictOnDelete).
         try {
             $item->delete();
@@ -109,7 +129,7 @@ class ItemController extends Controller
      * so transaction lines that point to a variant stay valid.
      * Stock of an existing variant is NEVER overwritten from the form
      * (a stale form would wipe out deliveries made in the meantime).
-     * Price and reorder level no longer exist as inputs; the reorder level is computed automatically.
+     * Price and reorder level no longer exist as inputs; the reorder point is computed automatically.
      */
     private function syncBrands(Item $item, array $brands): void
     {
