@@ -28,6 +28,18 @@ const deliveredOf = (line) => Number(line.delivered_quantity ?? 0);
 const remainingOf = (line) => Math.max(0, line.quantity - deliveredOf(line));
 const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
 
+// Variant text of a line (size + unit of measure). Comes from items.variant, loaded by PipelineController.
+const variantOf = (line) => {
+    const v = line?.variant?.label ?? null;
+    return v && v !== '—' ? String(v) : null;
+};
+
+// "Brand · Variant" (either part may be missing).
+const brandVariant = (line) => [line?.brand_name, variantOf(line)].filter(Boolean).join(' · ');
+
+// "Item · Brand · Variant" for plain-text places.
+const fullName = (line) => [line?.item_name, line?.brand_name, variantOf(line)].filter(Boolean).join(' · ');
+
 const MAX_DR_BYTES = 10 * 1024 * 1024; // keep in sync with max:10240 on the server
 
 const formatDate = (value) =>
@@ -63,16 +75,20 @@ const rowProblem = (row, line) => {
     const qty = Number(row?.quantity) || 0;
     if (qty <= 0) return null;
     if (row.condition === 'partial' && !(Number(row.written_off) > 0)) {
-        return `Enter how many ${line.item_name} units are damaged.`;
+        return `Enter how many ${fullName(line)} units are damaged.`;
     }
     if (notRestockedOf(row) > 0 && !row.reason) {
-        return `Pick a reason for the damaged ${line.item_name} units.`;
+        return `Pick a reason for the damaged ${fullName(line)} units.`;
     }
     return null;
 };
 
 const field =
     'block w-full rounded-lg border border-[#c9d6e5] bg-white px-4 py-3 text-base text-[#12306b] placeholder:text-[#8aa0bf] focus:border-[#1b4a7d] focus:outline-none focus:ring-2 focus:ring-[#1b4a7d]/20';
+
+// Same field, red border (used for a required field that is missing or rejected).
+const fieldBad =
+    'block w-full rounded-lg border border-red-400 bg-white px-4 py-3 text-base text-[#12306b] placeholder:text-[#8aa0bf] focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-200';
 
 // Smaller version used inside the return rows.
 const fieldSm =
@@ -92,6 +108,21 @@ const DELIVER_GRID = 'sm:grid-cols-[minmax(0,1fr)_6rem_6rem_6rem_12rem]';
 const RETURN_GRID = 'sm:grid-cols-[minmax(0,1fr)_4rem_9.5rem]';
 
 /* ----------------------------- small parts ----------------------------- */
+
+/** Brand and variant as small chips under the item name. */
+function BrandVariant({ line, className = '' }) {
+    const variant = variantOf(line);
+    if (!line?.brand_name && !variant) return null;
+
+    return (
+        <span className={`flex flex-wrap items-center gap-1 ${className}`}>
+            {line.brand_name && <span className="text-[#4a5d7a]">{line.brand_name}</span>}
+            {variant && (
+                <span className="rounded-full bg-[#eef3fa] px-2 py-0.5 text-[11px] font-medium text-[#4a5d7a]">{variant}</span>
+            )}
+        </span>
+    );
+}
 
 function QtyStepper({ value, max, onChange, label, disabled = false, large = false }) {
     const n = Number(value) || 0;
@@ -219,12 +250,16 @@ function TableHead({ className, children, roomy = false }) {
  * (Index.jsx also refuses to open it; this is the safety net. The server checks again.)
  *
  * Layout: one full-width items table, a details strip below it (DR + note), a slim summary bar.
+ * Every line shows its item name, brand and variant.
  *
  * Return rows, per line:
  *   condition  good | partial | bad   → how many go back on the shelf vs. are written off
  *   replace    true | false           → units stay owed (replacement) or the order shrinks
  *
- * Deliveries can also carry a DR number and a DR softcopy (PDF / image). Returns do not.
+ * Deliveries REQUIRE a DR number and a DR softcopy (PDF / image, max 10 MB). Returns do not.
+ * The server enforces the same rules.
+ *
+ * Cancel / click outside / Esc close the modal right away (no "Discard this entry?" question).
  */
 export default function DeliveryModal({ transaction, mode = 'deliver', movesBackTo = null, onClose, onCancel }) {
     const isHistory = mode === 'history';
@@ -365,6 +400,10 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
 
     const nothingToDo = lines.every((l) => maxFor(l) === 0);
 
+    // A delivery always needs its DR number and DR softcopy. Returns don't.
+    const drNumberMissing = !isReturn && !isHistory && data.dr_number.trim() === '';
+    const drFileMissing = !isReturn && !isHistory && !data.dr_file;
+
     const problems = [];
     if (isReturn) {
         lines.forEach((l, i) => {
@@ -373,15 +412,22 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
         });
     }
     if (shortLines.length > 0) problems.push('Not enough stock for one or more items.');
+    if (drNumberMissing) problems.push('Enter the DR number.');
+    if (drFileMissing) problems.push('Attach the DR softcopy (PDF or image).');
 
     const disabled = processing || nothingToDo || now === 0 || problems.length > 0;
 
     const hint = reviewing
         ? ''
-        : problems[0] ??
-          (!nothingToDo && now === 0 ? (isReturn ? 'Choose how many units are coming back.' : 'Enter a quantity to deliver.') : '');
+        : (!nothingToDo && now === 0 ? (isReturn ? 'Choose how many units are coming back.' : 'Enter a quantity to deliver.') : null) ??
+          problems[0] ??
+          '';
 
-    const itemName = (id) => lines.find((l) => l.id === id)?.item_name ?? 'Item';
+    // History rows point at a transaction line id: show item · brand · variant.
+    const itemName = (id) => {
+        const l = lines.find((x) => x.id === id);
+        return l ? fullName(l) : 'Item';
+    };
 
     /* ---- actions ---- */
     const submit = (e) => {
@@ -408,10 +454,10 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
                 }),
             };
 
-            // DR fields belong to deliveries only. Inertia switches to FormData when a file is present.
+            // DR fields belong to deliveries only (and are required there). Inertia switches to FormData when a file is present.
             if (!isReturn) {
-                payload.dr_number = d.dr_number;
-                if (d.dr_file) payload.dr_file = d.dr_file;
+                payload.dr_number = d.dr_number.trim();
+                payload.dr_file = d.dr_file;
             }
 
             return payload;
@@ -430,13 +476,9 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
         });
     };
 
-    const dirty =
-        !isHistory &&
-        (data.note !== '' || data.dr_number !== '' || data.dr_file !== null || (isReturn && now > 0));
-
+    // Closes right away: Cancel button, click outside the modal and Esc all come here.
     const close = () => {
         if (processing) return;
-        if (dirty && !window.confirm('Discard this entry? Nothing has been saved yet.')) return;
         reset();
         clearErrors();
         clearFileInput();
@@ -619,7 +661,7 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
                                 {!isReturn && (
                                     <div className="overflow-hidden rounded-xl border border-[#dbe4ef] bg-white">
                                         <TableHead roomy className={DELIVER_GRID}>
-                                            <span>Item</span>
+                                            <span>Item · Brand · Variant</span>
                                             <span className="text-center">Ordered</span>
                                             <span className="text-center">Done</span>
                                             <span className="text-center">Stock</span>
@@ -638,12 +680,10 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
                                                         <div className={`grid grid-cols-1 items-center gap-x-3 gap-y-1 ${DELIVER_GRID}`}>
                                                             <div className="min-w-0">
                                                                 <p className="truncate text-base font-bold text-[#12306b]">{line.item_name}</p>
-                                                                <p className="truncate text-sm text-[#4a5d7a]">
-                                                                    {line.brand_name}
-                                                                    <span className="sm:hidden">
-                                                                        {' '}· ordered {line.quantity} · done {deliveredOf(line)}
-                                                                        {stock != null && ` · stock ${stock}`}
-                                                                    </span>
+                                                                <BrandVariant line={line} className="mt-0.5 text-sm" />
+                                                                <p className="text-sm text-[#4a5d7a] sm:hidden">
+                                                                    ordered {line.quantity} · done {deliveredOf(line)}
+                                                                    {stock != null && ` · stock ${stock}`}
                                                                 </p>
                                                             </div>
 
@@ -670,7 +710,7 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
                                                                         value={row?.quantity ?? ''}
                                                                         max={remaining}
                                                                         onChange={(v) => setQty(index, v)}
-                                                                        label={`Quantity to deliver for ${line.item_name}`}
+                                                                        label={`Quantity to deliver for ${fullName(line)}`}
                                                                     />
                                                                 )}
                                                             </div>
@@ -692,7 +732,7 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
                                 {isReturn && !reviewing && (
                                     <div className="overflow-hidden rounded-lg border border-[#dbe4ef]">
                                         <TableHead className={RETURN_GRID}>
-                                            <span>Item</span>
+                                            <span>Item · Brand · Variant</span>
                                             <span className="text-center">Out</span>
                                             <span className="text-right">Return now</span>
                                         </TableHead>
@@ -712,10 +752,8 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
                                                         <div className={`grid grid-cols-1 items-center gap-x-3 gap-y-1 px-3 py-1.5 ${RETURN_GRID}`}>
                                                             <div className="min-w-0">
                                                                 <p className="truncate text-sm font-semibold">{line.item_name}</p>
-                                                                <p className="truncate text-xs text-muted-foreground">
-                                                                    {line.brand_name}
-                                                                    <span className="sm:hidden"> · {deliveredOf(line)} delivered</span>
-                                                                </p>
+                                                                <BrandVariant line={line} className="text-xs" />
+                                                                <p className="text-xs text-muted-foreground sm:hidden">{deliveredOf(line)} delivered</p>
                                                             </div>
                                                             <span className="hidden text-center text-sm tabular-nums sm:block">{deliveredOf(line)}</span>
                                                             <div className="flex items-center justify-end gap-2">
@@ -730,7 +768,7 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
                                                                     value={row.quantity}
                                                                     max={deliveredOf(line)}
                                                                     onChange={(v) => setQty(index, v)}
-                                                                    label={`Quantity to return for ${line.item_name}`}
+                                                                    label={`Quantity to return for ${fullName(line)}`}
                                                                 />
                                                             </div>
                                                         </div>
@@ -755,7 +793,7 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
                                                                                 value={row.written_off}
                                                                                 max={qty}
                                                                                 onChange={(v) => patchRow(index, { written_off: v })}
-                                                                                label={`Damaged units of ${line.item_name}`}
+                                                                                label={`Damaged units of ${fullName(line)}`}
                                                                             />
                                                                         </div>
                                                                     )}
@@ -764,7 +802,7 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
                                                                         <select
                                                                             value={row.reason}
                                                                             onChange={(e) => patchRow(index, { reason: e.target.value })}
-                                                                            aria-label={`Why ${line.item_name} can't be restocked`}
+                                                                            aria-label={`Why ${fullName(line)} can't be restocked`}
                                                                             className={`${fieldSm} w-44 ${!row.reason ? 'border-amber-400' : ''}`}
                                                                         >
                                                                             <option value="" disabled>Why not resold?</option>
@@ -820,7 +858,7 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
                                                     <li key={line.id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-3 py-2">
                                                         <div className="min-w-0">
                                                             <p className="truncate text-sm font-semibold">{line.item_name}</p>
-                                                            <p className="text-xs text-muted-foreground">{line.brand_name}</p>
+                                                            <BrandVariant line={line} className="text-xs" />
                                                         </div>
                                                         <div className="flex flex-wrap items-center gap-1.5">
                                                             <Pill tone="amber">{qty} returned</Pill>
@@ -844,28 +882,38 @@ export default function DeliveryModal({ transaction, mode = 'deliver', movesBack
                                             <>
                                                 <div className="rounded-xl border border-[#dbe4ef] bg-white p-4">
                                                     <label htmlFor="dr_number" className="block text-sm text-[#12306b]">
-                                                        DR number
+                                                        DR number <span className="text-red-500">*</span>
                                                     </label>
                                                     <input
                                                         id="dr_number"
                                                         type="text"
                                                         maxLength={60}
+                                                        required
+                                                        aria-required="true"
+                                                        aria-invalid={Boolean(errors.dr_number)}
                                                         placeholder="e.g. DR-000123"
                                                         value={data.dr_number}
-                                                        onChange={(e) => setData('dr_number', e.target.value)}
-                                                        className={`mt-2 ${field}`}
+                                                        onChange={(e) => {
+                                                            setData('dr_number', e.target.value);
+                                                            clearErrors('dr_number');
+                                                        }}
+                                                        className={`mt-2 ${errors.dr_number ? fieldBad : field}`}
                                                     />
                                                     {errors.dr_number && <p className="mt-1 text-xs text-red-600">{errors.dr_number}</p>}
                                                 </div>
 
                                                 <div className="min-w-0 rounded-xl border border-[#dbe4ef] bg-white p-4">
                                                     <label htmlFor="dr_file" className="block text-sm text-[#12306b]">
-                                                        DR softcopy <span className="text-[#6b84a8]">(PDF/image, max 10 MB)</span>
+                                                        DR softcopy <span className="text-red-500">*</span>{' '}
+                                                        <span className="text-[#6b84a8]">(PDF/image, max 10 MB)</span>
                                                     </label>
                                                     <input
                                                         ref={fileRef}
                                                         id="dr_file"
                                                         type="file"
+                                                        required
+                                                        aria-required="true"
+                                                        aria-invalid={Boolean(errors.dr_file || fileNotice)}
                                                         accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/*"
                                                         onChange={pickFile}
                                                         className="mt-2 block w-full text-sm text-[#12306b] file:mr-3 file:rounded-lg file:border file:border-[#c9d6e5] file:bg-[#eef3fa] file:px-4 file:py-3 file:text-sm file:font-semibold file:text-[#12306b] hover:file:bg-[#e3ecf7]"

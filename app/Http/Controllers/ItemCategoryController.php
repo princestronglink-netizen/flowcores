@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\ResolvesPerPage;
 use App\Models\ItemCategory;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
@@ -17,12 +18,29 @@ use Inertia\Inertia;
  */
 class ItemCategoryController extends Controller
 {
-    public function index()
+    use ResolvesPerPage;
+
+    public function index(Request $request)
     {
         Gate::authorize('viewAny', ItemCategory::class);
 
+        $search  = trim($request->string('search')->toString());
+        $perPage = $this->perPage($request);
+
         return Inertia::render('Category/Index', [
-            'categories' => ItemCategory::withCount('items')->orderBy('category_name')->get(),
+            'categories' => ItemCategory::withCount('items')
+                ->when($search !== '', function ($q) use ($search) {
+                    $like = '%' . addcslashes($search, '%_\\') . '%';
+
+                    $q->where(fn ($q) => $q->where('category_name', 'like', $like)
+                        ->orWhere('description', 'like', $like));
+                })
+                ->orderBy('category_name')
+                ->paginate($perPage)
+                ->withQueryString(),
+            'filters'    => ['search' => $search, 'per_page' => $perPage],
+            // Lets the page tell "no categories at all" apart from "no search match".
+            'hasAny'     => ItemCategory::exists(),
         ]);
     }
 

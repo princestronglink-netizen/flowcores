@@ -1,6 +1,6 @@
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import { usePage } from '@inertiajs/react';
-import { CheckCircle2, History, Inbox, Truck, Undo2, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, History, Inbox, Truck, Undo2, XCircle } from 'lucide-react';
 import { cx, priorityMeta } from '@/Components/ui/kit';
 
 /* Visual parts of the pipeline board. Drag/drop and move logic stays in Pages/Pipeline/Index.jsx. */
@@ -34,12 +34,42 @@ export function deliveryTotals(transaction) {
     };
 }
 
+/* ------------------------- days allowed per stage ------------------------- */
+
+const dayStart = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+
+/**
+ * Deadline of a card in its CURRENT stage, or null when the stage has no day limit.
+ *
+ * Counting starts on the day the card entered the stage and that day counts as day 1:
+ *   entered Oct 1, 3 days  -> due Oct 3, overdue from Oct 4
+ *   entered Oct 2, 5 days  -> due Oct 6, overdue from Oct 7
+ */
+export function stageDeadline(item, stage) {
+    if (!stage?.max_days || !item?.stage_entered_at) return null;
+
+    const due = dayStart(new Date(item.stage_entered_at));
+    due.setDate(due.getDate() + Number(stage.max_days));
+
+    const diff = Math.round((dayStart(new Date()) - due) / 86400000); // > 0 = overdue
+
+    return {
+        due,
+        overdue: diff > 0,
+        daysLate: Math.max(0, diff),
+        dueToday: diff === 0,
+    };
+}
+
+const shortDate = (d) => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+
 /**
  * Card content, kept minimal: name + amount on one line, client + small tags on the next.
  * Priority is the coloured bar on the left edge; High / Critical also get a tiny label.
+ * The last line shows the stage deadline (red when overdue).
  * Used on the card and on the drag overlay.
  */
-export function CardBody({ item }) {
+export function CardBody({ item, stage }) {
     const canViewAmounts = useCanViewAmounts();
     const p = item.priority ? priorityMeta(item.priority) : null;
     const urgent = item.priority === 'High' || item.priority === 'Critical';
@@ -47,6 +77,8 @@ export function CardBody({ item }) {
 
     const cpos = item.client_purchase_orders ?? [];
     const draftPo = cpos.some((c) => c.status === 'draft');
+
+    const deadline = stageDeadline(item, stage);
 
     return (
         <>
@@ -88,14 +120,40 @@ export function CardBody({ item }) {
                     )}
                 </div>
             </div>
+
+            {deadline && (
+                <p
+                    className={cx(
+                        'mt-1 flex items-center gap-1 text-[11px] font-medium',
+                        deadline.overdue ? 'text-red-600' : deadline.dueToday ? 'text-amber-600' : 'text-slate-400',
+                    )}
+                    title={`${stage.max_days} ${stage.max_days === 1 ? 'day' : 'days'} allowed in ${stage.stage_name}`}
+                >
+                    {(deadline.overdue || deadline.dueToday) && <AlertTriangle className="size-3 shrink-0" />}
+                    <span className="truncate">
+                        {deadline.overdue
+                            ? `Overdue by ${deadline.daysLate} ${deadline.daysLate === 1 ? 'day' : 'days'} · was due ${shortDate(deadline.due)}`
+                            : deadline.dueToday
+                              ? `Due today · ${shortDate(deadline.due)}`
+                              : `Due ${shortDate(deadline.due)}`}
+                    </span>
+                </p>
+            )}
         </>
     );
 }
 
-export function OverlayCard({ item }) {
+export function OverlayCard({ item, stage }) {
+    const overdue = stageDeadline(item, stage)?.overdue;
+
     return (
-        <div className="relative w-72 rotate-1 overflow-hidden rounded-md border border-slate-200 bg-white px-2.5 py-2 pl-3.5 shadow-xl ring-1 ring-black/5">
-            <CardBody item={item} />
+        <div
+            className={cx(
+                'relative w-72 rotate-1 overflow-hidden rounded-md border px-2.5 py-2 pl-3.5 shadow-xl ring-1 ring-black/5',
+                overdue ? 'border-red-300 bg-red-50' : 'border-slate-200 bg-white',
+            )}
+        >
+            <CardBody item={item} stage={stage} />
         </div>
     );
 }
@@ -119,6 +177,7 @@ function DeliveryProgress({ ordered, delivered }) {
 }
 
 /**
+ * stage         → the stage this card is in (used for the days-allowed deadline)
  * showDelivery  → show progress and actions (delivery stage and every stage after it)
  * canDeliver    → only in the delivery stage itself
  * onOpen        → click on the card (not on its buttons, not after a drag) opens the detail modal
@@ -126,7 +185,7 @@ function DeliveryProgress({ ordered, delivered }) {
  * The Deliver / Return buttons also need the user's delivery.record / delivery.return permission.
  * History is read-only, so everyone who can see the board can open it.
  */
-function TransactionCard({ item, showDelivery = false, canDeliver = false, onDeliveryAction, onOpen }) {
+function TransactionCard({ item, stage, showDelivery = false, canDeliver = false, onDeliveryAction, onOpen }) {
     const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: cardKey(item) });
 
     const mayDeliver = useCan('record_delivery');
@@ -138,6 +197,9 @@ function TransactionCard({ item, showDelivery = false, canDeliver = false, onDel
 
     const showDeliver = canDeliver && mayDeliver && delivered < ordered;
     const showReturn = mayReturn && delivered > 0;
+
+    // Past the stage's day limit: the whole card turns red.
+    const overdue = Boolean(stageDeadline(item, stage)?.overdue);
 
     const action =
         'flex items-center justify-center gap-1 rounded px-2 py-1 text-[11px] font-medium transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#667292]/40';
@@ -156,13 +218,16 @@ function TransactionCard({ item, showDelivery = false, canDeliver = false, onDel
                 if (e.key === 'Enter' && e.target === e.currentTarget) onOpen?.(item);
             }}
             className={cx(
-                'relative shrink-0 touch-none cursor-grab overflow-hidden rounded-md border border-slate-200 bg-white px-2.5 py-2 pl-3.5 transition',
-                'hover:border-slate-300 hover:shadow-sm active:cursor-grabbing',
+                'relative shrink-0 touch-none cursor-grab overflow-hidden rounded-md border px-2.5 py-2 pl-3.5 transition',
+                overdue
+                    ? 'border-red-300 bg-red-50 hover:border-red-400 hover:shadow-sm'
+                    : 'border-slate-200 bg-white hover:border-slate-300 hover:shadow-sm',
+                'active:cursor-grabbing',
                 'focus:outline-none focus-visible:ring-2 focus-visible:ring-[#667292]/50',
                 isDragging && 'opacity-30',
             )}
         >
-            <CardBody item={item} />
+            <CardBody item={item} stage={stage} />
 
             {showDelivery && (
                 <>
@@ -225,6 +290,7 @@ export function StageColumn({
     const canViewAmounts = useCanViewAmounts();
     const { setNodeRef, isOver } = useDroppable({ id: `stage-${stage.id}`, disabled });
     const stageTotal = items.reduce((s, i) => s + Number(i.total ?? 0), 0);
+    const overdueCount = items.filter((i) => stageDeadline(i, stage)?.overdue).length;
 
     return (
         <div
@@ -250,13 +316,33 @@ export function StageColumn({
                             </span>
                         )}
                     </div>
-                    <span className={cx('rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums', accent.badge)}>
-                        {items.length}
-                    </span>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                        {overdueCount > 0 && (
+                            <span
+                                className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold tabular-nums text-red-700"
+                                title="Cards past the days allowed in this stage"
+                            >
+                                <AlertTriangle className="size-3" />
+                                {overdueCount} overdue
+                            </span>
+                        )}
+                        <span className={cx('rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums', accent.badge)}>
+                            {items.length}
+                        </span>
+                    </div>
                 </div>
-                {canViewAmounts && (
-                    <p className="text-xs tabular-nums text-slate-400">{items.length > 0 ? currency(stageTotal) : '—'}</p>
-                )}
+                <div className="flex items-center justify-between gap-2">
+                    {canViewAmounts ? (
+                        <p className="text-xs tabular-nums text-slate-400">{items.length > 0 ? currency(stageTotal) : '—'}</p>
+                    ) : (
+                        <span />
+                    )}
+                    {stage.max_days ? (
+                        <p className="text-[11px] text-slate-400">
+                            {stage.max_days} {stage.max_days === 1 ? 'day' : 'days'} allowed
+                        </p>
+                    ) : null}
+                </div>
             </div>
 
             {/* The card list scrolls on its own when there are many cards */}
@@ -271,6 +357,7 @@ export function StageColumn({
                         <TransactionCard
                             key={cardKey(item)}
                             item={item}
+                            stage={stage}
                             showDelivery={showDelivery}
                             canDeliver={Boolean(stage.deducts_stock)}
                             onDeliveryAction={onDeliveryAction}

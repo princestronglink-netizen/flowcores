@@ -1,11 +1,12 @@
+// resources/js/Pages/Quotation/Index.jsx
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout';
 import PageHeading from '@/Components/PageHeading';
 import PageCard from '@/Components/PageCard';
-import { Head, Link, usePage } from '@inertiajs/react';
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/Components/ui/table';
-import { Button } from '@/Components/ui/Button';
-import { Pencil, Printer } from 'lucide-react';
-import { currency } from '@/Components/ui/kit';
+import QuotationTable from '@/Components/Quotation/QuotationTable';
+import Pagination from '@/Components/ui/Pagination';
+import useServerFilters from '@/Hooks/useServerFilters';
+import { FilterBar, SearchBox } from '@/Components/Index';
+import { Head, usePage } from '@inertiajs/react';
 
 /**
  * A quotation is a document of a transaction, so this list is the transactions that have been
@@ -16,12 +17,16 @@ import { currency } from '@/Components/ui/kit';
  *   edit_quotation   quotation.edit                 -> Edit button
  *   view_amounts     amounts.view                   -> Amount column
  */
-export default function Index({ quotations }) {
+export default function Index({ quotations: paginator, filters: initialFilters, hasAny }) {
     const can = usePage().props.auth?.can ?? {};
     const canPrint = Boolean(can.print_quotation);
     const canEdit = Boolean(can.edit_quotation);
     const canViewAmounts = Boolean(can.view_amounts);
-    const showActions = canPrint || canEdit;
+
+    // Replace 'quotations.index' with the actual route name of this list.
+    const [filters, setFilter] = useServerFilters(route('quotations.index'), initialFilters);
+
+    const noData = !hasAny;
 
     return (
         <AuthenticatedLayout
@@ -33,80 +38,33 @@ export default function Index({ quotations }) {
             }
         >
             <Head title="Quotations" />
+
             <PageCard>
                 <div className="p-5">
-                    {quotations.length === 0 ? (
-                        <p className="py-14 text-center text-sm text-slate-500">
-                            No quotations yet. They appear when a transaction reaches the quotation stage.
-                        </p>
-                    ) : (
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead>Quotation</TableHead>
-                                    <TableHead>Client</TableHead>
-                                    <TableHead>Prepared by</TableHead>
-                                    <TableHead>Stage</TableHead>
-                                    {canViewAmounts && <TableHead className="text-right">Amount</TableHead>}
-                                    {showActions && <TableHead className="text-right">Actions</TableHead>}
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {quotations.map((t) => (
-                                    <TableRow key={t.id}>
-                                        <TableCell>
-                                            <p className="font-medium text-slate-900">{t.quotation_number}</p>
-                                            <p className="text-xs text-slate-500">{t.name}</p>
-                                            <span
-                                                className={
-                                                    'mt-1 inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ' +
-                                                    (t.version > 0
-                                                        ? 'bg-amber-50 text-amber-700 ring-amber-200'
-                                                        : 'bg-slate-100 text-slate-600 ring-slate-200')
-                                                }
-                                            >
-                                                {t.version_label}
-                                            </span>
-                                            {t.quotation_frozen && (
-                                                <span className="ml-1 mt-1 inline-flex rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-700 ring-1 ring-inset ring-sky-200">
-                                                    Sent
-                                                </span>
-                                            )}
-                                        </TableCell>
-                                        <TableCell>
-                                            <p>{t.client?.client_name}</p>
-                                            <p className="text-xs text-slate-500">{t.contact_person?.contact_person}</p>
-                                        </TableCell>
-                                        <TableCell>
-                                            <p>{t.prepared_by ?? '—'}</p>
-                                            <p className="text-xs text-slate-500">{t.prepared_by_position ?? ''}</p>
-                                        </TableCell>
-                                        <TableCell>
-                                            <p>{t.stage?.stage_name ?? '—'}</p>
-                                            <p className="text-xs capitalize text-slate-500">{t.status}</p>
-                                        </TableCell>
-                                        {canViewAmounts && (
-                                            <TableCell className="text-right font-medium tabular-nums">{currency(t.amount)}</TableCell>
-                                        )}
-                                        {showActions && (
-                                            <TableCell className="flex flex-wrap justify-end gap-2">
-                                                {canPrint && (
-                                                    <a href={route('transactions.quotation.print', t.id)} target="_blank" rel="noreferrer">
-                                                        <Button variant="outline" size="icon" aria-label="Print"><Printer className="h-4 w-4" /></Button>
-                                                    </a>
-                                                )}
-                                                {canEdit && (
-                                                    <Link href={route('transactions.edit', t.id)}>
-                                                        <Button variant="outline" size="icon" aria-label="Edit transaction"><Pencil className="h-4 w-4" /></Button>
-                                                    </Link>
-                                                )}
-                                            </TableCell>
-                                        )}
-                                    </TableRow>
-                                ))}
-                            </TableBody>
-                        </Table>
+                    {!noData && (
+                        <FilterBar>
+                            <SearchBox
+                                value={filters.search}
+                                onChange={(v) => setFilter('search', v)}
+                                placeholder="Search quotation, client or stage"
+                            />
+                        </FilterBar>
                     )}
+
+                    <QuotationTable
+                        rows={paginator.data}
+                        canPrint={canPrint}
+                        canEdit={canEdit}
+                        canViewAmounts={canViewAmounts}
+                        emptyTitle={noData ? 'No quotations yet' : 'No quotations found'}
+                        emptyHint={
+                            noData
+                                ? 'They appear when a transaction reaches the quotation stage.'
+                                : 'Try a different search.'
+                        }
+                    />
+
+                    <Pagination paginator={paginator} onPerPageChange={(n) => setFilter('per_page', n)} />
                 </div>
             </PageCard>
         </AuthenticatedLayout>

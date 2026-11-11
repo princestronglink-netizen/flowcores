@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\ResolvesPerPage;
 use App\Models\Item;
 use App\Models\ItemCategory;
 use App\Models\StockMovement;
@@ -19,16 +20,60 @@ use Inertia\Inertia;
  */
 class ItemController extends Controller
 {
-    public function index()
+    use ResolvesPerPage;
+
+    public function index(Request $request)
     {
         Gate::authorize('viewAny', Item::class);
 
-        return Inertia::render('Item/Index', [
-            'items' => Item::with([
+        $stock    = $request->string('stock')->toString();      // all | restock | out
+        $search   = trim($request->string('search')->toString());
+        $category = $request->string('category')->toString();   // '' | none | <id>
+        $perPage  = $this->perPage($request);
+
+        $stock = in_array($stock, ['restock', 'out'], true) ? $stock : 'all';
+
+        $items = Item::with([
                 'category',
                 'brands.variants' => fn ($q) => $q->withDemand(),
-            ])->latest()->get(),
+            ])
+            ->when($stock === 'out', fn ($q) => $q->whereHas(
+                'brands.variants', fn ($v) => $v->outOfStock()
+            ))
+            ->when($stock === 'restock', fn ($q) => $q->whereHas(
+                'brands.variants', fn ($v) => $v->needsRestock()
+            ))
+            ->when($category === 'none', fn ($q) => $q->whereNull('item_category_id'))
+            ->when(ctype_digit($category), fn ($q) => $q->where('item_category_id', (int) $category))
+            ->when($search !== '', function ($q) use ($search) {
+                $like = '%' . addcslashes($search, '%_\\') . '%';
+
+                $q->where(function ($q) use ($like) {
+                    $q->where('item_name', 'like', $like)
+                        ->orWhereHas('category', fn ($c) => $c->where('category_name', 'like', $like))
+                        ->orWhereHas('brands', fn ($b) => $b->where('brand_name', 'like', $like));
+                });
+            })
+            ->latest()
+            ->latest('id')
+            ->paginate($perPage)
+            ->withQueryString();
+
+        return Inertia::render('Item/Index', [
+            'items'      => $items,
             'categories' => ItemCategory::orderBy('category_name')->get(['id', 'category_name']),
+            'filters'    => [
+                'stock'    => $stock,
+                'search'   => $search,
+                'category' => $category,
+                'per_page' => $perPage,
+            ],
+            // Tab counts across ALL items (not just the current page).
+            'counts'     => [
+                'all'     => Item::count(),
+                'restock' => Item::whereHas('brands.variants', fn ($v) => $v->needsRestock())->count(),
+                'out'     => Item::whereHas('brands.variants', fn ($v) => $v->outOfStock())->count(),
+            ],
         ]);
     }
 

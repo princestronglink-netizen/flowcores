@@ -22,20 +22,22 @@ class Transaction extends Model
         'client_contact_person_id',
         'pipeline_id',
         'pipeline_stage_id',
+        'stage_entered_at',     
         'status',
         'priority',
         'winning_message',
         'amount',
         'markup_percent',
         'vat_percent',
-        'remarks',              // printed on the quotation
-        'prepared_by',          // printed on the quotation
-        'prepared_by_position', // printed on the quotation
+        'remarks',              
+        'prepared_by',          
+        'prepared_by_position', 
     ];
 
     protected $casts = [
-        'markup_percent' => 'float',
-        'vat_percent'    => 'float',
+        'markup_percent'   => 'float',
+        'vat_percent'      => 'float',
+        'stage_entered_at' => 'datetime',
     ];
 
     // `total` is the grand total (subtotal + markup + VAT). The rest feed the breakdown in the UI.
@@ -86,7 +88,7 @@ class Transaction extends Model
 
     /* ------------------------------- Stages -------------------------------- */
 
-    public function moveToStage(PipelineStage $stage, ?int $changedBy = null, ?string $note = null): array
+        public function moveToStage(PipelineStage $stage, ?int $changedBy = null, ?string $note = null): array
     {
         if ($stage->pipeline_id !== $this->pipeline_id) {
             throw new \InvalidArgumentException('That stage does not belong to this transaction\'s pipeline.');
@@ -95,7 +97,11 @@ class Transaction extends Model
         $messages = [];
 
         DB::transaction(function () use ($stage, $changedBy, $note, &$messages) {
-            $this->update(['pipeline_stage_id' => $stage->id]);
+            $this->update([
+                'pipeline_stage_id' => $stage->id,
+                // The days-allowed count restarts from the day the card enters this stage.
+                'stage_entered_at'  => now(),
+            ]);
             $this->unsetRelation('stage');
 
             // Freeze the quotation once the card is past the quotation stage, thaw it when it is back.

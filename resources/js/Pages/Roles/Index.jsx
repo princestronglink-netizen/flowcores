@@ -2,7 +2,7 @@
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout';
 import PageHeading from '@/Components/PageHeading';
 import { Head, router, usePage } from '@inertiajs/react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@/Components/ui/Button';
 import { cx } from '@/Components/ui/kit';
 import {
@@ -148,7 +148,14 @@ function PermissionCard({ icon: Icon, title, description, granted, total, onAll,
 export default function Index({ roles, general, stages }) {
     const { errors } = usePage().props;
 
-    const [selectedId, setSelectedId] = useState(roles[0]?.id);
+    // Which role to open first: ?role=ID from the URL if it exists, otherwise the first role.
+    const initialRoleId = () => {
+        if (typeof window === 'undefined') return roles[0]?.id;
+        const fromUrl = Number(new URLSearchParams(window.location.search).get('role'));
+        return roles.some((r) => r.id === fromUrl) ? fromUrl : roles[0]?.id;
+    };
+
+    const [selectedId, setSelectedId] = useState(initialRoleId);
     const [draft, setDraft] = useState({}); // roleId -> permission names being edited
     const [newRole, setNewRole] = useState('');
     const [adding, setAdding] = useState(false);
@@ -159,6 +166,16 @@ export default function Index({ roles, general, stages }) {
 
     const role = roles.find((r) => r.id === selectedId) ?? roles[0];
     const totalPermissions = general.length + stages.length;
+
+    // Keep ?role=ID in the address bar. It runs again after every save, rename or delete,
+    // because Inertia redirects back to /roles and would otherwise drop the parameter.
+    useEffect(() => {
+        if (!role) return;
+        const url = new URL(window.location.href);
+        if (url.searchParams.get('role') === String(role.id)) return;
+        url.searchParams.set('role', role.id);
+        window.history.replaceState(window.history.state, '', url);
+    }, [role?.id, roles]);
 
     const current = (r) => draft[r.id] ?? r.permissions;
     const isDirty = (r) => draft[r.id] !== undefined && !sameSet(draft[r.id], r.permissions);
@@ -240,7 +257,6 @@ export default function Index({ roles, general, stages }) {
         const buckets = Object.fromEntries(GROUPS.map((g) => [g.id, []]));
         general.forEach((g) => buckets[groupIdFor(g.name)].push(g));
         return GROUPS.map((group) => ({ group, all: buckets[group.id] })).filter(({ all }) => all.length > 0);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [general]);
 
     const cards = visibleGroups

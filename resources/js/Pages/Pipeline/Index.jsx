@@ -38,6 +38,20 @@ const KINDS = {
 const kindOf = (t) => KINDS[t?.kind] ?? KINDS.transaction;
 const isTransaction = (t) => !t?.kind;
 
+// Once a client PO is confirmed the card can only move forward (the server checks this again).
+const hasConfirmedPo = (t) => (t?.client_purchase_orders ?? []).some((c) => c.status === 'confirmed');
+
+// Once anything is delivered (even partially) the card can only move forward too.
+// Returning the goods (delivered back to 0) lifts this again.
+const hasDelivered = (t) => deliveryTotals(t).delivered > 0;
+
+/** Why this card can't go back, or null when it can. */
+const backBlockedReason = (t) => {
+    if (hasConfirmedPo(t)) return 'The client PO is confirmed, so this card can no longer go back to a previous stage.';
+    if (hasDelivered(t)) return 'Items have been delivered, so this card can no longer go back to a previous stage.';
+    return null;
+};
+
 // `pipelines` defaults to [] so the page shows "No pipeline yet" instead of crashing
 // when the prop is missing (for example if another route renders this page without it).
 export default function Index({ pipelines = [] }) {
@@ -134,6 +148,10 @@ export default function Index({ pipelines = [] }) {
               .find((x) => cardKey(x.card) === viewingKey) ?? null
         : null;
 
+    // No checking in the first stage, unless that stage is where the quotation is created
+    // (then the quotation total can be checked right where it is made).
+    const viewingChecking = !(viewing?.stage?.is_initial && !viewing?.stage?.creates_quotation);
+
     // ---- Delivery modal data (transactions only) ----
     const deliveryIndex = stages.findIndex((s) => s.deducts_stock);
 
@@ -166,6 +184,8 @@ export default function Index({ pipelines = [] }) {
     const isAllowedStage = (index) => {
         if (activeIndex === -1) return true;
         if (Math.abs(index - activeIndex) > 1) return false;
+        // Client PO confirmed or anything delivered: the card can only move forward.
+        if (activeItem && index < activeIndex && backBlockedReason(activeItem)) return false;
         if (activeItem && !isTransaction(activeItem) && stages[index]?.deducts_stock) return false;
         // PERMISSION: while dragging, stages the user can't move cards into are disabled
         if (index !== activeIndex && !canMoveTo(stages[index])) return false;
@@ -224,7 +244,7 @@ export default function Index({ pipelines = [] }) {
 
         if (overId === 'done' || overId === 'lost') {
             // Done deals go through the completion checks first (final quotation, client PO,
-            // DR numbers + softcopies, and quotation ↔ PO ↔ delivered match).
+            // DR numbers + softcopies, and quotation ↔ PO ↔ delivered match on quantities and totals).
             // The confirm button stays disabled until every check passes.
             const checks =
                 overId === 'done' && isTx
@@ -256,6 +276,12 @@ export default function Index({ pipelines = [] }) {
         const targetIndex = stages.findIndex((s) => s.id === targetStageId);
         if (!targetStage || Math.abs(targetIndex - sourceIndex) !== 1) return;
 
+        // Client PO confirmed or anything delivered: no going back (the server checks this again).
+        if (targetIndex < sourceIndex && backBlockedReason(transaction)) {
+            setNotice(backBlockedReason(transaction));
+            return;
+        }
+
         // PERMISSION: ignore drops into a stage this user doesn't own (the server checks this again)
         if (!canMoveTo(targetStage)) {
             setNotice(`You don't have permission to move cards to ${targetStage.stage_name}.`);
@@ -271,10 +297,6 @@ export default function Index({ pipelines = [] }) {
         if (isTx && deliveryIndex >= 0) {
             if (sourceIndex === deliveryIndex && targetIndex > sourceIndex && delivered < ordered) {
                 setNotice('Deliver every item in full before moving past the delivery stage.');
-                return;
-            }
-            if (targetIndex < deliveryIndex && delivered > 0) {
-                setNotice('Return the delivered items first, then move this transaction back.');
                 return;
             }
         }
@@ -496,7 +518,9 @@ export default function Index({ pipelines = [] }) {
                                 />
                             </div>
 
-                            <DragOverlay>{activeItem && <OverlayCard item={activeItem} />}</DragOverlay>
+                            <DragOverlay>
+                                {activeItem && <OverlayCard item={activeItem} stage={stages.find((s) => s.id === activeStageId)} />}
+                            </DragOverlay>
                         </DndContext>
                     </div>
                 )}
@@ -522,11 +546,14 @@ export default function Index({ pipelines = [] }) {
                 onCancel={cancelMove}
             />
 
-            <CardDetailModal
-                item={viewing?.card ?? null}
-                stageName={viewing?.stage.stage_name}
-                onClose={() => setViewingKey(null)}
-            />
+               <CardDetailModal
+                    item={viewing?.card ?? null}
+                    stage={viewing?.stage ?? null}
+                    stageName={viewing?.stage.stage_name}
+                    checking={viewingChecking}
+                    isFirstStage={Boolean(viewing?.stage?.is_initial)}
+                    onClose={() => setViewingKey(null)}
+                />
 
             <DealResultOverlay result={resultEffect} onClose={() => setResultEffect(null)} />
 

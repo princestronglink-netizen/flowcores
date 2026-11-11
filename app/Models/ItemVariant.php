@@ -25,7 +25,7 @@ class ItemVariant extends Model
     protected $fillable = ['item_brand_id', 'unit_of_measure', 'size', 'stock'];
 
     /** Sent to the frontend with every variant, so badges need no extra queries. */
-    protected $appends = ['stock_status', 'demand', 'avg_daily_demand', 'reorder_point'];
+    protected $appends = ['label', 'stock_status', 'demand', 'avg_daily_demand', 'reorder_point'];
 
     public function brand(): BelongsTo
     {
@@ -35,6 +35,21 @@ class ItemVariant extends Model
     public function movements(): HasMany
     {
         return $this->hasMany(StockMovement::class);
+    }
+
+    /**
+     * Human-readable variant name, e.g. "500 ml" or "Large pcs".
+     * Variants have no name column: they are identified by size + unit of measure.
+     * Change the glue here if you want a different look (e.g. "Large (pcs)").
+     */
+    public function getLabelAttribute(): string
+    {
+        $label = trim(implode(' ', array_filter([
+            trim((string) $this->size),
+            trim((string) $this->unit_of_measure),
+        ])));
+
+        return $label !== '' ? $label : '—';
     }
 
     /**
@@ -55,6 +70,34 @@ class ItemVariant extends Model
                         ->where('created_at', '>=', now()->subDays(self::DEMAND_DAYS))
                 ),
         ]);
+    }
+
+    /** Same demand number as scopeWithDemand(), as a raw SQL expression (takes one ? binding: the window start). */
+    private static function demandSql(): string
+    {
+        return '(SELECT COALESCE(SUM(ti.quantity), 0) FROM transaction_items ti '
+            . 'WHERE ti.item_variant_id = item_variants.id '
+            . 'AND ti.transaction_id IN (SELECT t.id FROM transactions t WHERE t.status != \'lost\' AND t.created_at >= ?))';
+    }
+
+    /** stock <= 0 */
+    public function scopeOutOfStock($query)
+    {
+        return $query->where('item_variants.stock', '<=', 0);
+    }
+
+    /**
+     * Out OR low: stock <= CEIL(demand / 30 * (lead time + safety days)).
+     * Matches getReorderPointAttribute() + getStockStatusAttribute() (CEIL is 0 with no demand, so 0 stock still counts).
+     */
+    public function scopeNeedsRestock($query)
+    {
+        $factor = self::LEAD_TIME_DAYS + self::SAFETY_STOCK_DAYS;
+
+        return $query->whereRaw(
+            'item_variants.stock <= CEIL(' . self::demandSql() . " * {$factor}.0 / " . self::DEMAND_DAYS . ')',
+            [now()->subDays(self::DEMAND_DAYS)],
+        );
     }
 
     /** Total quantity ordered in the last 30 days (0 if loaded without withDemand()). */

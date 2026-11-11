@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\ResolvesPerPage;
 use App\Models\Client;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
@@ -16,12 +17,37 @@ use Inertia\Inertia;
  */
 class ClientController extends Controller
 {
-    public function index()
+    use ResolvesPerPage;
+
+    public function index(Request $request)
     {
         Gate::authorize('viewAny', Client::class);
 
+        $search  = trim($request->string('search')->toString());
+        $perPage = $this->perPage($request);
+
         return Inertia::render('Client/Index', [
-            'clients' => Client::with('contactPeople')->latest()->get(),
+            'clients' => Client::with('contactPeople')
+                ->when($search !== '', function ($q) use ($search) {
+                    $like = '%' . addcslashes($search, '%_\\') . '%';
+
+                    $q->where(function ($q) use ($like) {
+                        $q->where('client_name', 'like', $like)
+                            ->orWhere('address', 'like', $like)
+                            ->orWhereHas('contactPeople', function ($c) use ($like) {
+                                $c->where('contact_person', 'like', $like)
+                                    ->orWhere('contact_number', 'like', $like)
+                                    ->orWhere('email', 'like', $like);
+                            });
+                    });
+                })
+                ->latest()
+                ->latest('id')
+                ->paginate($perPage)
+                ->withQueryString(),
+            'filters' => ['search' => $search, 'per_page' => $perPage],
+            // Lets the page tell "no clients at all" apart from "no search match".
+            'hasAny'  => Client::exists(),
         ]);
     }
 

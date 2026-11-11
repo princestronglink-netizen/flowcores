@@ -26,6 +26,10 @@ Route::middleware(['auth'])->group(function () {
     // ---- Transactions ----
     Route::resource('transactions', TransactionController::class)->except(['show']);
 
+    // Done deal: quotation vs client PO vs delivered vs DR files (only for won transactions).
+    Route::get('transactions/{transaction}/cross-check', [TransactionController::class, 'crossCheck'])
+        ->name('transactions.crossCheck');
+
     // Per-stage permission is checked inside updateStage() through TransactionPolicy::moveToStage.
     Route::patch('transactions/{transaction}/stage', [TransactionController::class, 'updateStage'])
         ->name('transactions.updateStage');

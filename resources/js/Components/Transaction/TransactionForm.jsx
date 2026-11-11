@@ -133,12 +133,25 @@ function ReceiptRow({ label, children }) {
     );
 }
 
+/** Native fieldset: `disabled` turns off every input, select and button inside it. Looks like a plain wrapper. */
+const lockWrap = 'm-0 min-w-0 border-0 p-0';
+
 /**
  * itemsLocked: true once a delivery exists (or the order was deducted the old way).
  * Items and quantities are then read-only; everything else stays editable.
- * The server enforces the same rule; this keeps the form honest about it.
+ *
+ * poConfirmed: true once a client PO is confirmed. The whole quotation is then locked
+ * (client, items, markup, VAT, prepared by, remarks, name). Only priority and winning message stay editable.
+ *
+ * The server enforces the same rules; this keeps the form honest about it.
  */
-export default function TransactionForm({ clients = [], catalog = [], transaction = null, itemsLocked = false }) {
+export default function TransactionForm({
+    clients = [],
+    catalog = [],
+    transaction = null,
+    itemsLocked = false,
+    poConfirmed = false,
+}) {
     const isEditing = Boolean(transaction);
     const { auth } = usePage().props;
     const currentUser = auth?.user ?? {};
@@ -147,8 +160,9 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
     const fromPipeline =
         typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('from') === 'pipeline';
 
-    // Quotation issued and not sent yet: real edits create versions.
-    const quotationEditable = Boolean(transaction?.quotation_number) && !transaction?.quotation_frozen;
+    // Quotation issued and not sent yet (and no confirmed PO): real edits create versions.
+    const quotationEditable =
+        Boolean(transaction?.quotation_number) && !transaction?.quotation_frozen && !poConfirmed;
     const nextNumber = transaction?.quotation_number
         ? `${baseNumber(transaction.quotation_number)}-${(transaction.version ?? 0) + 1}`
         : null;
@@ -214,7 +228,7 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
 
     // Two rows can share a variant, so add them up before comparing with stock.
     const shortages = useMemo(() => {
-        if (itemsLocked) return [];
+        if (itemsLocked || poConfirmed) return [];
         const need = {};
         items.forEach((r) => {
             if (r.item_variant_id) need[r.item_variant_id] = (need[r.item_variant_id] || 0) + (Number(r.quantity) || 0);
@@ -225,11 +239,11 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                 return v && qty > Number(v.stock) ? { id, qty, stock: Number(v.stock) } : null;
             })
             .filter(Boolean);
-    }, [items, catalog, itemsLocked]);
+    }, [items, catalog, itemsLocked, poConfirmed]);
 
     // Lines that pick the same variant as another line. Saving is blocked until they are fixed.
     // (The rows themselves are flagged inside LineItemsEditor.)
-    const duplicateCount = itemsLocked ? 0 : duplicateLineCount(items);
+    const duplicateCount = itemsLocked || poConfirmed ? 0 : duplicateLineCount(items);
 
     // ---- form helpers ----
     const updateField = (field, value) => {
@@ -364,6 +378,12 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
             <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
                 {/* ---------------- Main column ---------------- */}
                 <div className="min-w-0 space-y-5">
+                    {poConfirmed && (
+                        <Banner tone="warning" icon={Lock} title="Client PO confirmed">
+                            The quotation is locked and can't be edited. Only the priority and winning message can still change.
+                        </Banner>
+                    )}
+
                     <Panel title="Overview" description="Name this transaction and set how urgent it is." icon={Receipt}>
                         <div className="grid gap-4 md:grid-cols-2">
                             <Field label="Transaction name" required htmlFor="transaction_name" error={errors.name}>
@@ -373,6 +393,7 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                                     placeholder="e.g. Acme Corp — Annual Renewal"
                                     value={data.name}
                                     onChange={(e) => updateField('name', e.target.value)}
+                                    disabled={poConfirmed}
                                     className={input(errors.name)}
                                 />
                             </Field>
@@ -387,136 +408,141 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                         </div>
                     </Panel>
 
-                    <Panel title="Client" description="Who is this transaction with?" icon={Building2}>
-                        <div className="grid gap-4 md:grid-cols-2">
-                            <div>
-                                <Field
-                                    label="Client"
-                                    required
-                                    htmlFor="client_id"
-                                    error={errors.client_id}
-                                    action={
-                                        <LinkButton icon={Plus} onClick={toggleAddClient}>
-                                            New client
-                                        </LinkButton>
-                                    }
-                                >
-                                    <SearchSelect
-                                        id="client_id"
-                                        ariaLabel="Client"
-                                        placeholder="Select a client"
-                                        searchPlaceholder="Type a client name"
-                                        emptyText="No clients found"
-                                        options={clientList.map((c) => ({
-                                            value: c.id,
-                                            label: c.client_name,
-                                        }))}
-                                        value={data.client_id}
-                                        onChange={handleClientChange}
-                                        inputClassName={input(errors.client_id)}
-                                    />
-                                </Field>
-
-                                {showAddClient && (
-                                    <div className={quickBox}>
-                                        {quickMessage && <Banner tone="error">{quickMessage}</Banner>}
-
-                                        {NEW_CLIENT_FIELDS.map(([key, placeholder, type, required]) => (
-                                            <div key={key}>
-                                                <input
-                                                    type={type}
-                                                    placeholder={required ? `${placeholder} *` : placeholder}
-                                                    aria-label={placeholder}
-                                                    aria-invalid={Boolean(quickErrors[key])}
-                                                    value={newClient[key]}
-                                                    onChange={(e) => {
-                                                        setNewClient((p) => ({ ...p, [key]: e.target.value }));
-                                                        clearQuickError(key);
-                                                    }}
-                                                    className={input(quickErrors[key])}
-                                                />
-                                                {quickErrors[key] && (
-                                                    <p role="alert" className="mt-1 text-xs text-red-600">{quickErrors[key][0]}</p>
-                                                )}
-                                            </div>
-                                        ))}
-
-                                        <div className="flex justify-end gap-2 pt-1">
-                                            <Button type="button" variant="outline" onClick={toggleAddClient}>Cancel</Button>
-                                            <Button type="button" variant="brand" onClick={submitNewClient} disabled={quickProcessing}>
-                                                {quickProcessing ? 'Adding…' : 'Add client'}
-                                            </Button>
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-
-                            <div>
-                                <Field
-                                    label="Contact person"
-                                    required
-                                    htmlFor="client_contact_person_id"
-                                    error={errors.client_contact_person_id}
-                                    hint={!data.client_id ? 'Pick a client first to see its contacts.' : undefined}
-                                    action={
-                                        data.client_id && (
-                                            <LinkButton icon={Plus} onClick={toggleAddContact}>
-                                                New contact
-                                            </LinkButton>
-                                        )
-                                    }
-                                >
-                                    <select
-                                        id="client_contact_person_id"
-                                        value={data.client_contact_person_id}
-                                        onChange={(e) => updateField('client_contact_person_id', e.target.value)}
-                                        disabled={!data.client_id}
-                                        className={input(errors.client_contact_person_id)}
+                    <fieldset disabled={poConfirmed} className={lockWrap}>
+                        <Panel title="Client" description="Who is this transaction with?" icon={Building2}>
+                            <div className="grid gap-4 md:grid-cols-2">
+                                <div>
+                                    <Field
+                                        label="Client"
+                                        required
+                                        htmlFor="client_id"
+                                        error={errors.client_id}
+                                        action={
+                                            !poConfirmed && (
+                                                <LinkButton icon={Plus} onClick={toggleAddClient}>
+                                                    New client
+                                                </LinkButton>
+                                            )
+                                        }
                                     >
-                                        <option value="" disabled>
-                                            {data.client_id ? 'Select a contact person' : 'Select a client first'}
-                                        </option>
-                                        {contactOptions.map((p) => (
-                                            <option key={p.id} value={p.id}>{p.contact_person}</option>
-                                        ))}
-                                    </select>
-                                </Field>
+                                        <SearchSelect
+                                            id="client_id"
+                                            ariaLabel="Client"
+                                            placeholder="Select a client"
+                                            searchPlaceholder="Type a client name"
+                                            emptyText="No clients found"
+                                            options={clientList.map((c) => ({
+                                                value: c.id,
+                                                label: c.client_name,
+                                            }))}
+                                            value={data.client_id}
+                                            onChange={handleClientChange}
+                                            disabled={poConfirmed}
+                                            inputClassName={input(errors.client_id)}
+                                        />
+                                    </Field>
 
-                                {showAddContact && (
-                                    <div className={quickBox}>
-                                        {quickMessage && <Banner tone="error">{quickMessage}</Banner>}
+                                    {showAddClient && !poConfirmed && (
+                                        <div className={quickBox}>
+                                            {quickMessage && <Banner tone="error">{quickMessage}</Banner>}
 
-                                        {NEW_CONTACT_FIELDS.map(([key, placeholder, type, required]) => (
-                                            <div key={key}>
-                                                <input
-                                                    type={type}
-                                                    placeholder={required ? `${placeholder} *` : placeholder}
-                                                    aria-label={placeholder}
-                                                    aria-invalid={Boolean(quickErrors[key])}
-                                                    value={newContact[key]}
-                                                    onChange={(e) => {
-                                                        setNewContact((p) => ({ ...p, [key]: e.target.value }));
-                                                        clearQuickError(key);
-                                                    }}
-                                                    className={input(quickErrors[key])}
-                                                />
-                                                {quickErrors[key] && (
-                                                    <p role="alert" className="mt-1 text-xs text-red-600">{quickErrors[key][0]}</p>
-                                                )}
+                                            {NEW_CLIENT_FIELDS.map(([key, placeholder, type, required]) => (
+                                                <div key={key}>
+                                                    <input
+                                                        type={type}
+                                                        placeholder={required ? `${placeholder} *` : placeholder}
+                                                        aria-label={placeholder}
+                                                        aria-invalid={Boolean(quickErrors[key])}
+                                                        value={newClient[key]}
+                                                        onChange={(e) => {
+                                                            setNewClient((p) => ({ ...p, [key]: e.target.value }));
+                                                            clearQuickError(key);
+                                                        }}
+                                                        className={input(quickErrors[key])}
+                                                    />
+                                                    {quickErrors[key] && (
+                                                        <p role="alert" className="mt-1 text-xs text-red-600">{quickErrors[key][0]}</p>
+                                                    )}
+                                                </div>
+                                            ))}
+
+                                            <div className="flex justify-end gap-2 pt-1">
+                                                <Button type="button" variant="outline" onClick={toggleAddClient}>Cancel</Button>
+                                                <Button type="button" variant="brand" onClick={submitNewClient} disabled={quickProcessing}>
+                                                    {quickProcessing ? 'Adding…' : 'Add client'}
+                                                </Button>
                                             </div>
-                                        ))}
-
-                                        <div className="flex justify-end gap-2 pt-1">
-                                            <Button type="button" variant="outline" onClick={toggleAddContact}>Cancel</Button>
-                                            <Button type="button" variant="brand" onClick={submitNewContact} disabled={quickProcessing}>
-                                                {quickProcessing ? 'Adding…' : 'Add contact'}
-                                            </Button>
                                         </div>
-                                    </div>
-                                )}
+                                    )}
+                                </div>
+
+                                <div>
+                                    <Field
+                                        label="Contact person"
+                                        required
+                                        htmlFor="client_contact_person_id"
+                                        error={errors.client_contact_person_id}
+                                        hint={!data.client_id ? 'Pick a client first to see its contacts.' : undefined}
+                                        action={
+                                            data.client_id && !poConfirmed && (
+                                                <LinkButton icon={Plus} onClick={toggleAddContact}>
+                                                    New contact
+                                                </LinkButton>
+                                            )
+                                        }
+                                    >
+                                        <select
+                                            id="client_contact_person_id"
+                                            value={data.client_contact_person_id}
+                                            onChange={(e) => updateField('client_contact_person_id', e.target.value)}
+                                            disabled={!data.client_id || poConfirmed}
+                                            className={input(errors.client_contact_person_id)}
+                                        >
+                                            <option value="" disabled>
+                                                {data.client_id ? 'Select a contact person' : 'Select a client first'}
+                                            </option>
+                                            {contactOptions.map((p) => (
+                                                <option key={p.id} value={p.id}>{p.contact_person}</option>
+                                            ))}
+                                        </select>
+                                    </Field>
+
+                                    {showAddContact && !poConfirmed && (
+                                        <div className={quickBox}>
+                                            {quickMessage && <Banner tone="error">{quickMessage}</Banner>}
+
+                                            {NEW_CONTACT_FIELDS.map(([key, placeholder, type, required]) => (
+                                                <div key={key}>
+                                                    <input
+                                                        type={type}
+                                                        placeholder={required ? `${placeholder} *` : placeholder}
+                                                        aria-label={placeholder}
+                                                        aria-invalid={Boolean(quickErrors[key])}
+                                                        value={newContact[key]}
+                                                        onChange={(e) => {
+                                                            setNewContact((p) => ({ ...p, [key]: e.target.value }));
+                                                            clearQuickError(key);
+                                                        }}
+                                                        className={input(quickErrors[key])}
+                                                    />
+                                                    {quickErrors[key] && (
+                                                        <p role="alert" className="mt-1 text-xs text-red-600">{quickErrors[key][0]}</p>
+                                                    )}
+                                                </div>
+                                            ))}
+
+                                            <div className="flex justify-end gap-2 pt-1">
+                                                <Button type="button" variant="outline" onClick={toggleAddContact}>Cancel</Button>
+                                                <Button type="button" variant="brand" onClick={submitNewContact} disabled={quickProcessing}>
+                                                    {quickProcessing ? 'Adding…' : 'Add contact'}
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
                             </div>
-                        </div>
-                    </Panel>
+                        </Panel>
+                    </fieldset>
 
                     {/* The shared item table */}
                     <LineItemsEditor
@@ -529,11 +555,13 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                         priceLabel="Unit price"
                         title="Line items"
                         description={
-                            itemsLocked
-                                ? 'Locked because deliveries have been recorded.'
-                                : 'Pick an item, brand and variant, then enter the quantity and unit price.'
+                            poConfirmed
+                                ? 'Locked because the client purchase order is confirmed.'
+                                : itemsLocked
+                                  ? 'Locked because deliveries have been recorded.'
+                                  : 'Pick an item, brand and variant, then enter the quantity and unit price.'
                         }
-                        locked={itemsLocked}
+                        locked={itemsLocked || poConfirmed}
                         delivered={deliveredPerLine}
                         notice={
                             itemsLocked ? (
@@ -546,78 +574,84 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                         }
                     />
 
-                    <Panel
-                        title="Markup & VAT"
-                        description="Markup is added to the subtotal first, then VAT is computed on the result."
-                        icon={Percent}
-                    >
-                        <div className="grid gap-4 md:grid-cols-2">
-                            <Field label="Markup (%)" htmlFor="markup_percent" error={errors.markup_percent} hint="0 for no markup.">
-                                <input
-                                    id="markup_percent"
-                                    type="text"
-                                    inputMode="decimal"
-                                    value={data.markup_percent}
-                                    onChange={(e) => updateField('markup_percent', decimalOnly(e.target.value))}
-                                    onBlur={() => data.markup_percent === '' && updateField('markup_percent', '0')}
-                                    className={input(errors.markup_percent)}
-                                />
-                            </Field>
+                    <fieldset disabled={poConfirmed} className={lockWrap}>
+                        <Panel
+                            title="Markup & VAT"
+                            description="Markup is added to the subtotal first, then VAT is computed on the result."
+                            icon={Percent}
+                        >
+                            <div className="grid gap-4 md:grid-cols-2">
+                                <Field label="Markup (%)" htmlFor="markup_percent" error={errors.markup_percent} hint="0 for no markup.">
+                                    <input
+                                        id="markup_percent"
+                                        type="text"
+                                        inputMode="decimal"
+                                        value={data.markup_percent}
+                                        onChange={(e) => updateField('markup_percent', decimalOnly(e.target.value))}
+                                        onBlur={() => data.markup_percent === '' && updateField('markup_percent', '0')}
+                                        className={input(errors.markup_percent)}
+                                    />
+                                </Field>
 
-                            <Field
-                                label="VAT (%)"
-                                htmlFor="vat_percent"
-                                error={errors.vat_percent}
-                                action={
-                                    <span className="flex gap-3">
-                                        <LinkButton onClick={() => updateField('vat_percent', '12')}>12%</LinkButton>
-                                        <LinkButton onClick={() => updateField('vat_percent', '0')}>VAT-exempt</LinkButton>
-                                    </span>
-                                }
-                            >
-                                <input
-                                    id="vat_percent"
-                                    type="text"
-                                    inputMode="decimal"
-                                    value={data.vat_percent}
-                                    onChange={(e) => updateField('vat_percent', decimalOnly(e.target.value))}
-                                    onBlur={() => data.vat_percent === '' && updateField('vat_percent', '0')}
-                                    className={input(errors.vat_percent)}
-                                />
-                            </Field>
-                        </div>
-                    </Panel>
+                                <Field
+                                    label="VAT (%)"
+                                    htmlFor="vat_percent"
+                                    error={errors.vat_percent}
+                                    action={
+                                        !poConfirmed && (
+                                            <span className="flex gap-3">
+                                                <LinkButton onClick={() => updateField('vat_percent', '12')}>12%</LinkButton>
+                                                <LinkButton onClick={() => updateField('vat_percent', '0')}>VAT-exempt</LinkButton>
+                                            </span>
+                                        )
+                                    }
+                                >
+                                    <input
+                                        id="vat_percent"
+                                        type="text"
+                                        inputMode="decimal"
+                                        value={data.vat_percent}
+                                        onChange={(e) => updateField('vat_percent', decimalOnly(e.target.value))}
+                                        onBlur={() => data.vat_percent === '' && updateField('vat_percent', '0')}
+                                        className={input(errors.vat_percent)}
+                                    />
+                                </Field>
+                            </div>
+                        </Panel>
+                    </fieldset>
 
-                    {transaction?.quotation_frozen && (
+                    {transaction?.quotation_frozen && !poConfirmed && (
                         <Banner tone="warning" icon={Lock} title="This quotation was already sent">
                             The card is past the quotation stage, so edits no longer create a new version. Move the card
                             back to the quotation stage to change it.
                         </Banner>
                     )}
 
-                    <Panel title="Prepared by" description="Printed at the bottom of the quotation." icon={UserRound}>
-                        <div className="grid gap-4 md:grid-cols-2">
-                            <Field label="Name" htmlFor="prepared_by" error={errors.prepared_by}>
-                                <input
-                                    id="prepared_by"
-                                    type="text"
-                                    value={data.prepared_by ?? ''}
-                                    onChange={(e) => updateField('prepared_by', e.target.value)}
-                                    className={input(errors.prepared_by)}
-                                />
-                            </Field>
-                            <Field label="Position" htmlFor="prepared_by_position" error={errors.prepared_by_position}>
-                                <input
-                                    id="prepared_by_position"
-                                    type="text"
-                                    placeholder="e.g. Purchasing Coordinator"
-                                    value={data.prepared_by_position ?? ''}
-                                    onChange={(e) => updateField('prepared_by_position', e.target.value)}
-                                    className={input(errors.prepared_by_position)}
-                                />
-                            </Field>
-                        </div>
-                    </Panel>
+                    <fieldset disabled={poConfirmed} className={lockWrap}>
+                        <Panel title="Prepared by" description="Printed at the bottom of the quotation." icon={UserRound}>
+                            <div className="grid gap-4 md:grid-cols-2">
+                                <Field label="Name" htmlFor="prepared_by" error={errors.prepared_by}>
+                                    <input
+                                        id="prepared_by"
+                                        type="text"
+                                        value={data.prepared_by ?? ''}
+                                        onChange={(e) => updateField('prepared_by', e.target.value)}
+                                        className={input(errors.prepared_by)}
+                                    />
+                                </Field>
+                                <Field label="Position" htmlFor="prepared_by_position" error={errors.prepared_by_position}>
+                                    <input
+                                        id="prepared_by_position"
+                                        type="text"
+                                        placeholder="e.g. Purchasing Coordinator"
+                                        value={data.prepared_by_position ?? ''}
+                                        onChange={(e) => updateField('prepared_by_position', e.target.value)}
+                                        className={input(errors.prepared_by_position)}
+                                    />
+                                </Field>
+                            </div>
+                        </Panel>
+                    </fieldset>
 
                     <Panel title="Remarks" description="Printed on the quotation under Remarks." icon={StickyNote}>
                         <div className="space-y-4">
@@ -628,6 +662,7 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                                     placeholder="e.g. Price is valid for 30 days. Delivery within 5 working days."
                                     value={data.remarks ?? ''}
                                     onChange={(e) => updateField('remarks', e.target.value)}
+                                    disabled={poConfirmed}
                                     className={textareaCls(errors.remarks)}
                                 />
                             </Field>
@@ -763,6 +798,12 @@ export default function TransactionForm({ clients = [], catalog = [], transactio
                             </dl>
 
                             <div className="space-y-2">
+                                {poConfirmed && (
+                                    <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                                        The client PO is confirmed, so the quotation is locked. Saving only updates the
+                                        priority and winning message.
+                                    </p>
+                                )}
                                 {quotationEditable && (
                                     <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
                                         Changing the client, items, markup, VAT, remarks or prepared-by keeps the current quotation in the

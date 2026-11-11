@@ -1,20 +1,31 @@
 import { useState } from 'react';
 import Modal from '@/Components/Modal';
-import { Link, router } from '@inertiajs/react';
+import { Link } from '@inertiajs/react';
+import ConfirmClientPoModal from '@/Components/ClientPurchaseOrder/ConfirmClientPoModal';
 import { Button } from '@/Components/ui/Button';
 import { AlertTriangle, Check, CheckCircle2, FileText, Paperclip, Pencil, Receipt } from 'lucide-react';
-import { currency, useCan, useCanViewAmounts } from './Board';
+import { currency, useCan, useCanViewAmounts, stageDeadline } from './Board';
 import { PriorityPill, cx } from '@/Components/ui/kit';
 
 /* ------------------------------ helpers ------------------------------ */
 
 const norm = (s) => String(s ?? '').trim().toLowerCase();
-const keyOf = (l) => `${norm(l.item_name)}|${norm(l.brand_name)}`; // same key as completionChecks.js
 const num = (v) => Number(v ?? 0);
 const money = (n) => Math.round(num(n) * 100) / 100;
 
+// One row per VARIANT (item + brand + variant). Falls back to item + brand when a line has no variant id.
+const keyOf = (l) => (l.item_variant_id ? `v${l.item_variant_id}` : `${norm(l.item_name)}|${norm(l.brand_name)}`);
+
+// Variant text of a line. Quotation lines carry `variant.label` (size + unit of measure),
+// client PO lines carry `variant_label` (added by PipelineController).
+const variantLabel = (l) => {
+    const v = l.variant_label ?? l.variant?.label ?? null;
+    return v && v !== '—' ? String(v) : null;
+};
+
 /**
- * One row per item + brand, merging the quotation lines, the client PO lines and the deliveries.
+ * One row per item + brand + variant, merging the quotation lines, the client PO lines and the deliveries.
+ * Quotation and PO are compared by quantity and by LINE TOTAL (qty x price), not by unit price.
  * Each row also carries its own list of problems, so nothing has to be compared by eye.
  */
 function buildRows({ item, cpos, canViewAmounts }) {
@@ -23,11 +34,13 @@ function buildRows({ item, cpos, canViewAmounts }) {
         const k = keyOf(l);
         if (!map.has(k)) {
             map.set(k, {
-                key: k, name: l.item_name, brand: l.brand_name,
+                key: k, name: l.item_name, brand: l.brand_name, variant: null,
                 qQty: 0, qAmt: 0, pQty: 0, pAmt: 0, delivered: 0, inQuote: false, inPo: false,
             });
         }
-        return map.get(k);
+        const r = map.get(k);
+        if (!r.variant) r.variant = variantLabel(l);
+        return r;
     };
 
     (item.items ?? []).forEach((l) => {
@@ -49,20 +62,25 @@ function buildRows({ item, cpos, canViewAmounts }) {
 
     const hasPo = cpos.length > 0;
 
-    return [...map.values()].map((r) => {
-        const qPrice = r.qQty ? r.qAmt / r.qQty : 0;
-        const pPrice = r.pQty ? r.pAmt / r.pQty : 0;
-        const target = hasPo && r.inPo ? r.pQty : r.qQty; // what should end up delivered
-        const problems = [];
+    return [...map.values()]
+        .map((r) => {
+            const target = hasPo && r.inPo ? r.pQty : r.qQty; // what should end up delivered
+            const problems = [];
 
-        if (hasPo && !r.inPo) problems.push('Not on PO');
-        if (hasPo && !r.inQuote) problems.push('Not on quotation');
-        if (hasPo && r.inPo && r.inQuote && r.pQty !== r.qQty) problems.push('Qty differs');
-        if (canViewAmounts && hasPo && r.inPo && r.inQuote && money(pPrice) !== money(qPrice)) problems.push('Price differs');
-        if (r.delivered > target) problems.push('Over-delivered');
+            if (hasPo && !r.inPo) problems.push('Not on PO');
+            if (hasPo && !r.inQuote) problems.push('Not on quotation');
+            if (hasPo && r.inPo && r.inQuote && r.pQty !== r.qQty) problems.push('Qty differs');
+            if (canViewAmounts && hasPo && r.inPo && r.inQuote && money(r.pAmt) !== money(r.qAmt)) problems.push('Total differs');
+            if (r.delivered > target) problems.push('Over-delivered');
 
-        return { ...r, qPrice, pPrice, target, balance: target - r.delivered, problems };
-    });
+            return { ...r, target, balance: target - r.delivered, problems };
+        })
+        .sort(
+            (a, b) =>
+                String(a.name ?? '').localeCompare(String(b.name ?? '')) ||
+                String(a.brand ?? '').localeCompare(String(b.brand ?? '')) ||
+                String(a.variant ?? '').localeCompare(String(b.variant ?? '')),
+        );
 }
 
 /* ------------------------------ parts ------------------------------ */
@@ -79,44 +97,16 @@ function Meta({ label, children, className }) {
 }
 
 /**
- * Slim strip per client PO: number, status, client PO no., Confirm / Edit. The items live in the table below.
+ * Slim strip per client PO: number, status, client PO no./date, Confirm.
+ * No edit button: a draft follows the quotation, a confirmed PO is frozen.
+ * Confirm opens a modal that requires the client's PO number and PO date.
  *
- * PERMISSION (the server checks these again):
- *   auth.can.confirm_client_po (client_po.confirm) -> Confirm button
- *   auth.can.edit_client_po    (client_po.edit)    -> Edit button
+ * PERMISSION (the server checks it again): auth.can.confirm_client_po -> Confirm button
  */
-function ClientPoStrip({ cpo, transaction }) {
-    const [error, setError] = useState(null);
+function ClientPoStrip({ cpo }) {
     const [confirming, setConfirming] = useState(false);
-
     const canConfirm = useCan('confirm_client_po');
-    const canEditPo = useCan('edit_client_po');
-
-    const delivered = (transaction.deliveries ?? []).length > 0;
-    const canEdit = cpo.status !== 'cancelled' && !delivered;
-    const missingPoNumber = !String(cpo.client_po_number ?? '').trim();
-
-    const confirm = () => {
-        if (!canConfirm) return;
-
-        // Same rule the server enforces, checked first so the user gets a clear message.
-        if (missingPoNumber) {
-            setError("Enter the client's PO number first (use Edit), then confirm.");
-            return;
-        }
-
-        setError(null);
-        router.post(
-            route('client-purchase-orders.confirm', cpo.id),
-            {},
-            {
-                preserveScroll: true,
-                onStart: () => setConfirming(true),
-                onError: (errors) => setError(Object.values(errors)[0] ?? 'Could not confirm this purchase order.'),
-                onFinish: () => setConfirming(false),
-            },
-        );
-    };
+    const confirmed = cpo.status === 'confirmed';
 
     return (
         <div className="space-y-2 rounded-xl bg-white px-4 py-3 ring-1 ring-[#dbe4ef]">
@@ -128,38 +118,24 @@ function ClientPoStrip({ cpo, transaction }) {
                             {cpo.status}
                         </span>
                     </p>
-                    <p className={cx('truncate text-xs', missingPoNumber ? 'font-medium text-amber-700' : 'text-slate-500')}>
-                        {missingPoNumber ? 'No client PO number yet' : `Client PO no. ${cpo.client_po_number}`}
+                    <p className="truncate text-xs text-slate-500">
+                        {confirmed
+                            ? `Client PO no. ${cpo.client_po_number}${cpo.client_po_date ? ` · ${String(cpo.client_po_date).slice(0, 10)}` : ''}`
+                            : cpo.status === 'draft'
+                              ? 'Follows the quotation until confirmed'
+                              : null}
                     </p>
                 </div>
 
-                <div className="flex shrink-0 gap-2">
-                    {cpo.status === 'draft' && canConfirm && (
-                        <Button
-                            type="button"
-                            variant="brand"
-                            onClick={confirm}
-                            disabled={confirming}
-                            title={missingPoNumber ? "Enter the client's PO number first" : undefined}
-                            className={missingPoNumber ? 'opacity-60' : undefined}
-                        >
-                            <Check className="size-3.5" /> {confirming ? 'Confirming…' : 'Confirm'}
-                        </Button>
-                    )}
-                    {canEdit && canEditPo && (
-                        <Link href={route('client-purchase-orders.edit', { client_purchase_order: cpo.id, from: 'pipeline' })}>
-                            <Button type="button" variant="outline">
-                                <Pencil className="size-3.5" /> Edit
-                            </Button>
-                        </Link>
-                    )}
-                </div>
+                {cpo.status === 'draft' && canConfirm && (
+                    <Button type="button" variant="brand" onClick={() => setConfirming(true)} className="shrink-0">
+                        <Check className="size-3.5" /> Confirm
+                    </Button>
+                )}
             </div>
 
-            {error && (
-                <p role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700">
-                    {error}
-                </p>
+            {canConfirm && (
+                <ConfirmClientPoModal cpo={confirming ? cpo : null} onClose={() => setConfirming(false)} />
             )}
         </div>
     );
@@ -198,10 +174,14 @@ function PricingSummary({ item }) {
 }
 
 /**
- * THE cross-check table: quotation ↔ client PO ↔ delivered, one row per item.
- * Columns appear only when they apply (PO column only when a PO exists, etc.).
+ * THE cross-check table: quotation ↔ client PO ↔ delivered, one row per item + brand + variant.
+ * Amounts are LINE TOTALS (qty x price), not unit prices.
+ * Columns appear only when they apply (PO columns only when a PO exists, etc.).
+ *
+ * isFirstStage = true → the card is still a plain "Transaction", so the table says
+ * "Transaction" / "Qty" / "Total" instead of "Quotation ...".
  */
-function CrossCheckTable({ item, cpos, canViewAmounts }) {
+function CrossCheckTable({ item, cpos, canViewAmounts, checking = true, isFirstStage = false }) {
     const hasPo = cpos.length > 0;
     const hasDelivery = (item.deliveries ?? []).length > 0 || (item.items ?? []).some((l) => num(l.delivered_quantity) > 0);
 
@@ -212,22 +192,33 @@ function CrossCheckTable({ item, cpos, canViewAmounts }) {
     const td = (right) => cx('px-4 py-3 text-sm', right && 'text-right tabular-nums');
 
     const tot = rows.reduce(
-        (s, r) => ({ q: s.q + r.qQty, p: s.p + r.pQty, d: s.d + r.delivered, b: s.b + Math.max(0, r.balance) }),
-        { q: 0, p: 0, d: 0, b: 0 },
+        (s, r) => ({
+            q: s.q + r.qQty,
+            p: s.p + r.pQty,
+            d: s.d + r.delivered,
+            b: s.b + Math.max(0, r.balance),
+            qa: s.qa + r.qAmt,
+            pa: s.pa + r.pAmt,
+        }),
+        { q: 0, p: 0, d: 0, b: 0, qa: 0, pa: 0 },
     );
-    const poAmount = cpos.reduce((s, c) => s + num(c.amount), 0);
 
-    // Number of columns before the "Check" column, for the footer label.
-    const leadCols =
-        1 + 1 + (hasPo ? 1 : 0) + (hasDelivery ? 2 : 0) + (canViewAmounts ? (hasPo ? 2 : 1) + 1 : 0);
+    // Number of columns before the "Check" column, for the empty-state row (Item + Brand + Variant + Qty ...).
+    const leadCols = 3 + 1 + (hasPo ? 1 : 0) + (hasDelivery ? 2 : 0) + (canViewAmounts ? (hasPo ? 2 : 1) : 0);
 
     return (
         <div className="space-y-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
                 <h3 className="text-sm font-bold uppercase tracking-[0.15em] text-[#12306b]">
-                    Quotation{hasPo && ' · PO'}{hasDelivery && ' · Delivery'}
+                    {isFirstStage ? (
+                        'Transaction'
+                    ) : (
+                        <>
+                            Quotation{hasPo && ' · PO'}{hasDelivery && ' · Delivery'}
+                        </>
+                    )}
                 </h3>
-                {rows.length > 0 && (
+                {rows.length > 0 && checking && (
                     <span
                         className={cx(
                             'inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium',
@@ -245,44 +236,52 @@ function CrossCheckTable({ item, cpos, canViewAmounts }) {
                     <thead>
                         <tr className="bg-[#eef3fa] text-xs font-semibold uppercase tracking-wide text-slate-600">
                             <th className={th(false)}>Item</th>
-                            <th className={th(true)}>Quotation qty</th>
+                            <th className={th(false)}>Brand</th>
+                            <th className={th(false)}>Variant</th>
+                            <th className={th(true)}>{isFirstStage ? 'Qty' : 'Quotation qty'}</th>
                             {hasPo && <th className={th(true)}>PO qty</th>}
                             {hasDelivery && <th className={th(true)}>Delivered</th>}
                             {hasDelivery && <th className={th(true)}>Balance</th>}
-                            {canViewAmounts && <th className={th(true)}>Quotation price</th>}
-                            {canViewAmounts && hasPo && <th className={th(true)}>PO price</th>}
-                            {canViewAmounts && <th className={th(true)}>Subtotal</th>}
-                            <th className={th(false)}>Check</th>
+                            {canViewAmounts && <th className={th(true)}>{isFirstStage ? 'Total' : 'Quotation total'}</th>}
+                            {canViewAmounts && hasPo && <th className={th(true)}>PO total</th>}
+                            {checking && <th className={th(false)}>Check</th>}
                         </tr>
                     </thead>
 
                     <tbody className="divide-y divide-[#e6edf5]">
                         {rows.length === 0 && (
                             <tr>
-                                <td colSpan={leadCols + 1} className="px-4 py-4 text-center text-xs text-slate-500">
+                                <td colSpan={leadCols + (checking ? 1 : 0)} className="px-4 py-4 text-center text-xs text-slate-500">
                                     No items.
                                 </td>
                             </tr>
                         )}
 
                         {rows.map((r) => {
-                            const qtyDiff = hasPo && r.inPo && r.inQuote && r.pQty !== r.qQty;
-                            const priceDiff = canViewAmounts && hasPo && r.inPo && r.inQuote && money(r.pPrice) !== money(r.qPrice);
-                            const over = r.delivered > r.target;
-                            const complete = r.delivered > 0 && r.delivered === r.target;
+                            const qtyDiff = checking && hasPo && r.inPo && r.inQuote && r.pQty !== r.qQty;
+                            const totalDiff = checking && canViewAmounts && hasPo && r.inPo && r.inQuote && money(r.pAmt) !== money(r.qAmt);
+                            const over = checking && r.delivered > r.target;
+                            const complete = checking && r.delivered > 0 && r.delivered === r.target;
                             const bad = 'font-semibold text-amber-700';
 
                             return (
-                                <tr key={r.key} className={r.problems.length > 0 ? 'bg-amber-50/40' : undefined}>
+                                <tr key={r.key} className={checking && r.problems.length > 0 ? 'bg-amber-50/40' : undefined}>
+                                    <td className={cx(td(false), 'font-medium text-slate-900')}>{r.name || '—'}</td>
+                                    <td className={cx(td(false), 'text-slate-700')}>{r.brand || '—'}</td>
                                     <td className={td(false)}>
-                                        <span className="font-medium text-slate-900">{r.name}</span>
-                                        {r.brand && <span className="text-[#6b84a8]"> — {r.brand}</span>}
+                                        {r.variant ? (
+                                            <span className="rounded-full bg-[#eef3fa] px-2 py-0.5 text-xs font-medium text-[#4a5d7a]">
+                                                {r.variant}
+                                            </span>
+                                        ) : (
+                                            <span className="text-slate-400">—</span>
+                                        )}
                                     </td>
 
                                     <td className={cx(td(true), !r.inQuote && 'text-slate-400')}>{r.inQuote ? r.qQty : '—'}</td>
 
                                     {hasPo && (
-                                        <td className={cx(td(true), qtyDiff || !r.inPo ? bad : '')}>{r.inPo ? r.pQty : '—'}</td>
+                                        <td className={cx(td(true), qtyDiff || (checking && !r.inPo) ? bad : '')}>{r.inPo ? r.pQty : '—'}</td>
                                     )}
 
                                     {hasDelivery && (
@@ -301,24 +300,27 @@ function CrossCheckTable({ item, cpos, canViewAmounts }) {
                                         </td>
                                     )}
 
-                                    {canViewAmounts && <td className={td(true)}>{r.inQuote ? currency(r.qPrice) : '—'}</td>}
-                                    {canViewAmounts && hasPo && (
-                                        <td className={cx(td(true), priceDiff ? bad : '')}>{r.inPo ? currency(r.pPrice) : '—'}</td>
+                                    {canViewAmounts && (
+                                        <td className={td(true)}>{r.inQuote ? currency(r.qAmt) : '—'}</td>
                                     )}
-                                    {canViewAmounts && <td className={td(true)}>{r.inQuote ? currency(r.qAmt) : '—'}</td>}
+                                    {canViewAmounts && hasPo && (
+                                        <td className={cx(td(true), totalDiff ? bad : '')}>{r.inPo ? currency(r.pAmt) : '—'}</td>
+                                    )}
 
-                                    <td className={td(false)}>
-                                        {r.problems.length === 0 ? (
-                                            <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700">
-                                                <CheckCircle2 className="size-3.5" /> OK
-                                            </span>
-                                        ) : (
-                                            <span className="inline-flex items-start gap-1 text-xs font-medium text-amber-700">
-                                                <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-                                                {r.problems.join(' · ')}
-                                            </span>
-                                        )}
-                                    </td>
+                                    {checking && (
+                                        <td className={td(false)}>
+                                            {r.problems.length === 0 ? (
+                                                <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700">
+                                                    <CheckCircle2 className="size-3.5" /> OK
+                                                </span>
+                                            ) : (
+                                                <span className="inline-flex items-start gap-1 text-xs font-medium text-amber-700">
+                                                    <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+                                                    {r.problems.join(' · ')}
+                                                </span>
+                                            )}
+                                        </td>
+                                    )}
                                 </tr>
                             );
                         })}
@@ -327,23 +329,25 @@ function CrossCheckTable({ item, cpos, canViewAmounts }) {
                     {rows.length > 0 && (
                         <tfoot>
                             <tr className="border-t border-[#dbe4ef] bg-[#f6f9fc] text-sm font-semibold">
-                                <td className="px-4 py-2.5 text-xs font-medium text-slate-500">Total</td>
+                                <td colSpan={3} className="px-4 py-2.5 text-xs font-medium text-slate-500">Total</td>
                                 <td className="px-4 py-2.5 text-right tabular-nums">{tot.q}</td>
                                 {hasPo && <td className="px-4 py-2.5 text-right tabular-nums">{tot.p}</td>}
                                 {hasDelivery && <td className="px-4 py-2.5 text-right tabular-nums">{tot.d}</td>}
                                 {hasDelivery && <td className="px-4 py-2.5 text-right tabular-nums">{tot.b}</td>}
-                                {canViewAmounts && <td className="px-4 py-2.5" />}
-                                {canViewAmounts && hasPo && (
-                                    <td className="px-4 py-2.5 text-right tabular-nums" title="Total of the client PO(s)">
-                                        {currency(poAmount)}
-                                    </td>
-                                )}
                                 {canViewAmounts && (
-                                    <td className="px-4 py-2.5 text-right tabular-nums" title="Quotation subtotal">
-                                        {currency(item.subtotal)}
+                                    <td
+                                        className="px-4 py-2.5 text-right tabular-nums"
+                                        title={isFirstStage ? 'Transaction items total' : 'Quotation items total'}
+                                    >
+                                        {currency(tot.qa)}
                                     </td>
                                 )}
-                                <td className="px-4 py-2.5" />
+                                {canViewAmounts && hasPo && (
+                                    <td className="px-4 py-2.5 text-right tabular-nums" title="Client PO items total">
+                                        {currency(tot.pa)}
+                                    </td>
+                                )}
+                                {checking && <td className="px-4 py-2.5" />}
                             </tr>
                         </tfoot>
                     )}
@@ -394,8 +398,25 @@ function DeliveryReceipts({ item }) {
     );
 }
 
-function TransactionBody({ item, stageName, canViewAmounts }) {
-    const cpos = (item.client_purchase_orders ?? []).filter((c) => c.status !== 'cancelled');
+/** "Due in this stage" value: date, red when overdue, amber when due today. Empty when the stage has no day limit. */
+function StageDue({ item, stage }) {
+    const d = stageDeadline(item, stage);
+    if (!d) return null;
+
+    const date = d.due.toLocaleDateString(undefined, { dateStyle: 'medium' });
+
+    return (
+        <span className={d.overdue ? 'font-semibold text-red-600' : d.dueToday ? 'font-semibold text-amber-600' : ''}>
+            {date}
+            {d.overdue && ` · overdue by ${d.daysLate} ${d.daysLate === 1 ? 'day' : 'days'}`}
+            {d.dueToday && ' · due today'}
+        </span>
+    );
+}
+
+function TransactionBody({ item, stage, stageName, canViewAmounts, checking, isFirstStage }) {
+    // Only a CONFIRMED client PO appears in the cross-check table. Drafts still show in the strip above (to Confirm / Edit).
+    const cpos = (item.client_purchase_orders ?? []).filter((c) => c.status === 'confirmed');
     const hasPricing = canViewAmounts && (num(item.markup_percent) > 0 || num(item.vat_percent) > 0);
 
     return (
@@ -412,16 +433,25 @@ function TransactionBody({ item, stageName, canViewAmounts }) {
                     </Meta>
                 )}
                 <Meta label="Stage">{stageName}</Meta>
+                <Meta label="Due in this stage">
+                    <StageDue item={item} stage={stage} />
+                </Meta>
                 <Meta label="Priority">{item.priority ? <PriorityPill value={item.priority} /> : null}</Meta>
             </dl>
 
-            {/* ---------- Client PO actions (Confirm / Edit), no table ---------- */}
+            {/* ---------- Client PO strip (Confirm only), no table ---------- */}
             {(item.client_purchase_orders ?? []).map((c) => (
-                <ClientPoStrip key={c.id} cpo={c} transaction={item} />
+                <ClientPoStrip key={c.id} cpo={c} />
             ))}
 
             {/* ---------- The one table ---------- */}
-            <CrossCheckTable item={item} cpos={cpos} canViewAmounts={canViewAmounts} />
+            <CrossCheckTable
+                item={item}
+                cpos={cpos}
+                canViewAmounts={canViewAmounts}
+                checking={checking}
+                isFirstStage={isFirstStage}
+            />
 
             <DeliveryReceipts item={item} />
 
@@ -445,8 +475,20 @@ function TransactionBody({ item, stageName, canViewAmounts }) {
     );
 }
 
-/** item = a board card (a transaction). stageName = the stage it is in. */
-export default function CardDetailModal({ item, stageName, onClose }) {
+/**
+ * item = a board card (a transaction). stage = the stage it is in (used for the due date).
+ * stageName = the name of that stage.
+ * checking = false in the first stage (no cross-check there), unless that stage is where the quotation is created.
+ * isFirstStage = true when the card is in the first (initial) stage: the table is then called "Transaction", not "Quotation".
+ */
+export default function CardDetailModal({
+    item,
+    stage = null,
+    stageName,
+    checking = true,
+    isFirstStage = false,
+    onClose,
+}) {
     const canViewAmounts = useCanViewAmounts();
 
     // PERMISSION: auth.can.print_quotation = quotation.view + amounts.view (the server checks this again)
@@ -509,7 +551,14 @@ export default function CardDetailModal({ item, stageName, onClose }) {
 
                         {/* ---------- Body ---------- */}
                         <div className="px-8 pb-8 pt-6">
-                            <TransactionBody item={item} stageName={stageName} canViewAmounts={canViewAmounts} />
+                            <TransactionBody
+                                item={item}
+                                stage={stage}
+                                stageName={stageName}
+                                canViewAmounts={canViewAmounts}
+                                checking={checking}
+                                isFirstStage={isFirstStage}
+                            />
                         </div>
                     </div>
 

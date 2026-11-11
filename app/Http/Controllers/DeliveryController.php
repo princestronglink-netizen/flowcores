@@ -22,12 +22,22 @@ class DeliveryController extends Controller
         ];
     }
 
-    /** DR: optional delivery receipt number + softcopy. Deliveries only, not returns. */
+    /** DR: the delivery receipt number and softcopy are REQUIRED for every delivery (not for returns). */
     private function drRules(): array
     {
         return [
-            'dr_number' => 'nullable|string|max:60',
-            'dr_file'   => 'nullable|file|mimes:pdf,jpg,jpeg,png,webp|max:10240', // 10 MB
+            'dr_number' => 'required|string|max:60',
+            'dr_file'   => 'required|file|mimes:pdf,jpg,jpeg,png,webp|max:10240', // 10 MB
+        ];
+    }
+
+    private function drMessages(): array
+    {
+        return [
+            'dr_number.required' => 'The DR number is required.',
+            'dr_file.required'   => 'The DR softcopy is required.',
+            'dr_file.mimes'      => 'The DR softcopy must be a PDF or an image (JPG, PNG, WEBP).',
+            'dr_file.max'        => 'The DR softcopy may not be larger than 10 MB.',
         ];
     }
 
@@ -63,11 +73,17 @@ class DeliveryController extends Controller
             ]);
         }
 
-        $validated = $request->validate($this->rules() + $this->drRules()); // DR
+        // DR number and DR softcopy are required here.
+        $validated = $request->validate($this->rules() + $this->drRules(), $this->drMessages());
+
+        // A delivery must actually deliver something.
+        if (collect($validated['items'])->sum(fn ($i) => (int) $i['quantity']) <= 0) {
+            return back()->withErrors(['items' => 'Enter a quantity to deliver for at least one item.']);
+        }
 
         // DR: save the softcopy on the private disk first; it is removed again if the delivery fails.
         $file = $request->file('dr_file');
-        $path = $file?->store("delivery-receipts/{$transaction->id}", 'local');
+        $path = $file->store("delivery-receipts/{$transaction->id}", 'local');
 
         try {
             $delivery = $transaction->recordDelivery(
@@ -76,9 +92,9 @@ class DeliveryController extends Controller
                 $validated['note'] ?? null,
                 $validated['request_token'] ?? null,
                 [ // DR
-                    'dr_number'    => filled($validated['dr_number'] ?? null) ? trim($validated['dr_number']) : null,
+                    'dr_number'    => trim($validated['dr_number']),
                     'dr_file_path' => $path,
-                    'dr_file_name' => $file?->getClientOriginalName(),
+                    'dr_file_name' => $file->getClientOriginalName(),
                 ],
             );
         } catch (InsufficientStockException $e) {
@@ -119,6 +135,11 @@ class DeliveryController extends Controller
         }
 
         $validated = $request->validate($this->returnRules());
+
+        // A return must actually return something.
+        if (collect($validated['items'])->sum(fn ($i) => (int) $i['quantity']) <= 0) {
+            return back()->withErrors(['items' => 'Enter a quantity to return for at least one item.']);
+        }
 
         try {
             $delivery = $transaction->recordReturn(

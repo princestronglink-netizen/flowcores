@@ -9,9 +9,10 @@ use Illuminate\Support\Facades\DB;
 
 /**
  * The client's own order, sent after they accept a quotation.
- * Starts as a copy of the accepted quotation (or the transaction's items). The user edits it to
- * match what the client really ordered. Confirming copies the final items, markup, VAT and amount
- * onto the transaction, so delivery and stock code keeps reading transaction_items unchanged.
+ * Starts as a copy of the transaction's items. While it is a DRAFT it follows every edit made to the
+ * transaction / quotation (syncFromTransaction). It cannot be edited by hand.
+ * Confirming (client PO number + date required) freezes it and copies the final items, markup, VAT
+ * and amount onto the transaction, so delivery and stock code keeps reading transaction_items unchanged.
  */
 class ClientPurchaseOrder extends Model
 {
@@ -77,11 +78,11 @@ class ClientPurchaseOrder extends Model
 
     /* -------------------------------- Rules -------------------------------- */
 
-    /** Why this record can't be edited right now, or null if it can. */
+    /** Why this record can't be confirmed right now, or null if it can. */
     public function lockReason(): ?string
     {
         if ($this->status === 'cancelled') {
-            return "A cancelled client purchase order can't be edited.";
+            return "A cancelled client purchase order can't be changed.";
         }
 
         $tx = $this->transaction;
@@ -95,6 +96,48 @@ class ClientPurchaseOrder extends Model
         }
 
         return null;
+    }
+
+    /**
+     * DRAFT only: re-copy the transaction's current items and pricing into this PO.
+     * Called after the quotation / transaction is edited. A confirmed or cancelled PO is never touched.
+     */
+    public function syncFromTransaction(): void
+    {
+        if ($this->status !== 'draft') {
+            return;
+        }
+
+        DB::transaction(function () {
+            $tx    = $this->transaction()->firstOrFail();
+            $lines = $tx->items()->get();
+
+            $this->items()->delete();
+            $this->items()->createMany($lines->map(fn ($l) => [
+                'item_variant_id' => $l->item_variant_id,
+                'item_name'       => $l->item_name,
+                'brand_name'      => $l->brand_name,
+                'quantity'        => $l->quantity,
+                'unit_price'      => $l->unit_price,
+            ])->all());
+
+            $subtotal = $lines->sum(fn ($l) => $l->quantity * $l->unit_price);
+
+            $this->update([
+                'markup_percent'       => $tx->markup_percent,
+                'vat_percent'          => $tx->vat_percent,
+                'remarks'              => $tx->remarks,
+                'prepared_by'          => $tx->prepared_by,
+                'prepared_by_position' => $tx->prepared_by_position,
+                'amount'               => Transaction::breakdown(
+                    (float) $subtotal,
+                    (float) $tx->markup_percent,
+                    (float) $tx->vat_percent
+                )['total'],
+            ]);
+
+            $this->unsetRelation('items');
+        });
     }
 
     /** Copy this order's items, markup, VAT and details onto the transaction (replaces its items). */
@@ -126,13 +169,14 @@ class ClientPurchaseOrder extends Model
     }
 
     /**
-     * draft -> confirmed. Needs the client's PO number. Updates the transaction's items and amount.
+     * draft -> confirmed. The client's PO number and PO date are REQUIRED and are entered here.
+     * Updates the transaction's items and amount. After this the PO can no longer change.
      *
      * @throws \RuntimeException
      */
-    public function confirm(?int $by = null): void
+    public function confirm(?int $by, string $clientPoNumber, string $clientPoDate): void
     {
-        DB::transaction(function () use ($by) {
+        DB::transaction(function () use ($by, $clientPoNumber, $clientPoDate) {
             // Lock the transaction first so a delivery can't slip in while we replace its items.
             $tx = Transaction::whereKey($this->transaction_id)->lockForUpdate()->firstOrFail();
             $this->refresh();
@@ -142,8 +186,8 @@ class ClientPurchaseOrder extends Model
                 throw new \RuntimeException('Only a draft client purchase order can be confirmed.');
             }
 
-            if (blank($this->client_po_number)) {
-                throw new \RuntimeException("Enter the client's PO number before confirming.");
+            if (blank(trim($clientPoNumber)) || blank($clientPoDate)) {
+                throw new \RuntimeException("Enter the client's PO number and PO date before confirming.");
             }
 
             if ($reason = $this->lockReason()) {
@@ -153,6 +197,11 @@ class ClientPurchaseOrder extends Model
             if ($this->items()->doesntExist()) {
                 throw new \RuntimeException('Add at least one item.');
             }
+
+            $this->update([
+                'client_po_number' => trim($clientPoNumber),
+                'client_po_date'   => $clientPoDate,
+            ]);
 
             $this->syncToTransaction();
             $this->update(['status' => 'confirmed', 'confirmed_at' => now()]);

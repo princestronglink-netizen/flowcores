@@ -2,11 +2,13 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\ResolvesPerPage;
 use App\Models\Client;
 use App\Models\ClientContactPerson;
 use App\Models\ItemVariant;
 use App\Models\Transaction;
 use App\Models\TransactionVersion;
+use Illuminate\Http\Request;
 use Inertia\Inertia;
 
 /**
@@ -15,14 +17,36 @@ use Inertia\Inertia;
  */
 class TransactionQuotationController extends Controller
 {
+    use ResolvesPerPage;
+
     /** Every transaction that has been issued a quotation number. */
-    public function index()
+    public function index(Request $request)
     {
+        $search  = trim($request->string('search')->toString());
+        $perPage = $this->perPage($request);
+
         return Inertia::render('Quotation/Index', [
             'quotations' => Transaction::with(['client', 'contactPerson', 'items', 'stage'])
                 ->whereNotNull('quotation_number')
+                ->when($search !== '', function ($q) use ($search) {
+                    $like = '%' . addcslashes($search, '%_\\') . '%';
+
+                    $q->where(function ($q) use ($like) {
+                        $q->where('quotation_number', 'like', $like)
+                            ->orWhere('name', 'like', $like)
+                            ->orWhere('prepared_by', 'like', $like)
+                            ->orWhereHas('client', fn ($c) => $c->where('client_name', 'like', $like))
+                            ->orWhereHas('contactPerson', fn ($c) => $c->where('contact_person', 'like', $like))
+                            ->orWhereHas('stage', fn ($s) => $s->where('stage_name', 'like', $like));
+                    });
+                })
                 ->latest('quotation_issued_at')
-                ->get(),
+                ->latest('id')
+                ->paginate($perPage)
+                ->withQueryString(),
+            'filters' => ['search' => $search, 'per_page' => $perPage],
+            // Lets the page tell "no quotations at all" apart from "no search match".
+            'hasAny'  => Transaction::whereNotNull('quotation_number')->exists(),
         ]);
     }
 
@@ -31,12 +55,20 @@ class TransactionQuotationController extends Controller
     {
         abort_unless($transaction->hasQuotation(), 404);
 
+        $doc = $transaction->quotationDocument();
+
+        // Remarks come from the document when it has them, otherwise from the transaction itself.
+        // (A sent quotation is frozen, so the transaction's remarks are the ones that were sent.)
+        $remarks = collect([data_get($doc, 'remarks'), data_get($doc, 'note'), $transaction->remarks])
+            ->first(fn ($v) => filled($v));
+
         return Inertia::render('Quotation/Print', [
             'quotation' => $this->withPricing(
-                $transaction->quotationDocument(),
+                $doc,
                 (float) $transaction->markup_percent,
                 (float) $transaction->vat_percent,
                 [
+                    'remarks'              => $remarks,
                     'prepared_by'          => $transaction->prepared_by,
                     'prepared_by_position' => $transaction->prepared_by_position,
                 ],
@@ -53,12 +85,14 @@ class TransactionQuotationController extends Controller
 
         // Versions saved before markup/VAT existed were priced without them, so they print as 0.
         // Versions saved before "prepared by" existed fall back to the current values.
+        // Old snapshots stored remarks under "note".
         return Inertia::render('Quotation/Print', [
             'quotation' => $this->withPricing(
                 $transaction->versionDocument($version),
                 (float) ($s['markup_percent'] ?? 0),
                 (float) ($s['vat_percent'] ?? 0),
                 [
+                    'remarks'              => $s['remarks'] ?? $s['note'] ?? null,
                     'prepared_by'          => $s['prepared_by'] ?? $transaction->prepared_by,
                     'prepared_by_position' => $s['prepared_by_position'] ?? $transaction->prepared_by_position,
                 ],
@@ -74,6 +108,11 @@ class TransactionQuotationController extends Controller
     public function restore(Transaction $transaction, TransactionVersion $version)
     {
         abort_unless($version->transaction_id === $transaction->id, 404);
+
+        // A confirmed client PO freezes the quotation for good.
+        if ($transaction->clientPurchaseOrders()->where('status', 'confirmed')->exists()) {
+            return back()->withErrors(['restore' => 'The client purchase order is confirmed, so the quotation can no longer be changed.']);
+        }
 
         if ($transaction->quotationIsFrozen()) {
             return back()->withErrors(['restore' => 'The quotation was already sent (the card is past the quotation stage). Move the card back to the quotation stage to change it.']);

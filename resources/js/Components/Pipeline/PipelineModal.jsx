@@ -11,6 +11,7 @@ import {
     PackageMinus,
     FileText,
     ClipboardList,
+    Clock,
 } from 'lucide-react';
 
 // Palette: slate #667292 · teal #8d9db6 · cream #bccad6 · deepEdge #3a4157 · mist #eef1f5
@@ -29,6 +30,7 @@ const emptyStage = () => ({
     stage_code: '',
     stage_name: '',
     stage_description: '',
+    max_days: '', // days a card may stay here (empty = no limit)
     deducts_stock: false,
     creates_quotation: false,
     creates_client_po: false,
@@ -104,6 +106,7 @@ export default function PipelineModal({ show, onClose, pipeline }) {
                                   stage_code: s.stage_code ?? '',
                                   stage_name: s.stage_name ?? '',
                                   stage_description: s.stage_description ?? '',
+                                  max_days: s.max_days ?? '',
                                   deducts_stock: Boolean(s.deducts_stock),
                                   creates_quotation: Boolean(s.creates_quotation),
                                   creates_client_po: Boolean(s.creates_client_po),
@@ -178,10 +181,13 @@ export default function PipelineModal({ show, onClose, pipeline }) {
     const submit = (e) => {
         e.preventDefault();
 
-        // Strip the temporary React key before sending.
+        // Strip the temporary React key before sending. An empty "days" box means no limit.
         transform((d) => ({
             ...d,
-            stages: d.stages.map(({ _key, ...stage }) => stage),
+            stages: d.stages.map(({ _key, ...stage }) => ({
+                ...stage,
+                max_days: stage.max_days === '' || stage.max_days == null ? null : Number(stage.max_days),
+            })),
         }));
 
         const options = {
@@ -305,6 +311,7 @@ export default function PipelineModal({ show, onClose, pipeline }) {
                                 const codeError = errors[`stages.${index}.stage_code`];
                                 const nameError = errors[`stages.${index}.stage_name`];
                                 const descError = errors[`stages.${index}.stage_description`];
+                                const daysError = errors[`stages.${index}.max_days`];
                                 const isFirst = index === 0;
                                 const isLast = index === stages.length - 1;
 
@@ -340,6 +347,12 @@ export default function PipelineModal({ show, onClose, pipeline }) {
                                                     {stage.creates_client_po && (
                                                         <span className="rounded-full bg-teal-100 px-2 py-0.5 text-xs font-medium text-teal-700">
                                                             Client PO
+                                                        </span>
+                                                    )}
+                                                    {stage.max_days !== '' && stage.max_days != null && (
+                                                        <span className="inline-flex items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">
+                                                            <Clock className="h-3 w-3" />
+                                                            {stage.max_days} {Number(stage.max_days) === 1 ? 'day' : 'days'}
                                                         </span>
                                                     )}
                                                     {!isFirst &&
@@ -414,20 +427,49 @@ export default function PipelineModal({ show, onClose, pipeline }) {
                                                 </div>
                                             </div>
 
-                                            <div className="mt-3">
-                                                <label htmlFor={`stage_description_${index}`} className={labelClass}>
-                                                    Description
-                                                </label>
-                                                <input
-                                                    id={`stage_description_${index}`}
-                                                    type="text"
-                                                    placeholder="Optional"
-                                                    value={stage.stage_description}
-                                                    onChange={(e) => updateStage(index, 'stage_description', e.target.value)}
-                                                    className={inputClass(descError)}
-                                                />
-                                                {descError && <p className={errorClass}>{descError}</p>}
+                                            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_12rem]">
+                                                <div>
+                                                    <label htmlFor={`stage_description_${index}`} className={labelClass}>
+                                                        Description
+                                                    </label>
+                                                    <input
+                                                        id={`stage_description_${index}`}
+                                                        type="text"
+                                                        placeholder="Optional"
+                                                        value={stage.stage_description}
+                                                        onChange={(e) => updateStage(index, 'stage_description', e.target.value)}
+                                                        className={inputClass(descError)}
+                                                    />
+                                                    {descError && <p className={errorClass}>{descError}</p>}
+                                                </div>
+
+                                                <div>
+                                                    <label htmlFor={`stage_max_days_${index}`} className={labelClass}>
+                                                        Days allowed
+                                                    </label>
+                                                    <input
+                                                        id={`stage_max_days_${index}`}
+                                                        type="number"
+                                                        inputMode="numeric"
+                                                        min={1}
+                                                        max={365}
+                                                        placeholder="No limit"
+                                                        value={stage.max_days}
+                                                        onChange={(e) => updateStage(index, 'max_days', e.target.value)}
+                                                        className={inputClass(daysError)}
+                                                    />
+                                                    {daysError && <p className={errorClass}>{daysError}</p>}
+                                                </div>
                                             </div>
+
+                                            <p className="mt-1.5 flex items-start gap-1.5 text-xs text-[#667292]">
+                                                <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                                                <span>
+                                                    How long a card may stay in this stage. Counting starts the day the card
+                                                    enters it (the creation day for the first stage). After the due date the
+                                                    card turns red.
+                                                </span>
+                                            </p>
 
                                             {stageFlags.map(({ flag, icon: Icon, title, text }) => (
                                                 <label

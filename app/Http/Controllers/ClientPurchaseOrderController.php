@@ -2,38 +2,65 @@
 
 namespace App\Http\Controllers;
 
-use App\Http\Controllers\Concerns\HandlesLineItems;
+use App\Http\Controllers\Concerns\ResolvesPerPage;
 use App\Models\ClientPurchaseOrder;
-use App\Models\Transaction;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Inertia\Inertia;
 
 /**
  * PERMISSIONS (ClientPurchaseOrderPolicy):
- *   index                    -> viewAny  (client_po.view)
- *   edit / update / cancel   -> update   (client_po.edit)
- *   confirm                  -> confirm  (client_po.confirm)
- *                               (update() with "confirm" ticked needs it too)
- *   destroy                  -> delete   (client_po.delete)
- * Prices are only sent to users with amounts.view.
+ *   index            -> viewAny  (client_po.view)
+ *   cancel           -> update   (client_po.edit)
+ *   confirm          -> confirm  (client_po.confirm)
+ *   destroy          -> delete   (client_po.delete)
+ * A client PO has no edit screen: while it is a draft it follows the quotation/transaction,
+ * and once confirmed it is frozen. Prices are only sent to users with amounts.view.
  */
 class ClientPurchaseOrderController extends Controller
 {
-    use HandlesLineItems;
+    use ResolvesPerPage;
 
     public function index(Request $request)
     {
         Gate::authorize('viewAny', ClientPurchaseOrder::class);
 
+        $status  = $request->string('status')->toString();
+        $search  = trim($request->string('search')->toString());
+        $perPage = $this->perPage($request);
+
+        // Tab counts come from the DB, not from the current page.
+        $counts = ClientPurchaseOrder::query()
+            ->selectRaw('status, count(*) as total')
+            ->groupBy('status')
+            ->pluck('total', 'status');
+
         $orders = ClientPurchaseOrder::with([
-            'client', 'contactPerson', 'items', 'transaction:id,name,status',
-        ])->latest()->get();
+                'client', 'contactPerson', 'items', 'transaction:id,name,status',
+            ])
+            ->when(
+                array_key_exists($status, ClientPurchaseOrder::STATUSES),
+                fn ($q) => $q->where('status', $status),
+            )
+            ->when($search !== '', function ($q) use ($search) {
+                $like = '%' . addcslashes($search, '%_\\') . '%';
+
+                $q->where(function ($q) use ($like) {
+                    $q->where('cpo_number', 'like', $like)
+                        ->orWhere('client_po_number', 'like', $like)
+                        ->orWhereHas('client', fn ($c) => $c->where('client_name', 'like', $like))
+                        ->orWhereHas('contactPerson', fn ($c) => $c->where('contact_person', 'like', $like))
+                        ->orWhereHas('transaction', fn ($t) => $t->where('name', 'like', $like));
+                });
+            })
+            ->latest()
+            ->latest('id')
+            ->paginate($perPage)
+            ->withQueryString();
 
         // No amounts.view = the prices never leave the server.
         if (! $request->user()->can('amounts.view')) {
-            $orders->each(function ($order) {
+            $orders->getCollection()->each(function ($order) {
                 $order->makeHidden([
                     'amount', 'subtotal', 'markup_percent', 'markup_amount',
                     'vat_percent', 'vat_amount', 'total',
@@ -45,125 +72,27 @@ class ClientPurchaseOrderController extends Controller
         return Inertia::render('ClientPurchaseOrder/Index', [
             'clientPurchaseOrders' => $orders,
             'statuses'             => ClientPurchaseOrder::STATUSES,
+            'counts'               => ['all' => $counts->sum()] + $counts->all(),
+            'filters'              => [
+                'status'   => $status ?: 'all',
+                'search'   => $search,
+                'per_page' => $perPage,
+            ],
         ]);
     }
 
-    public function edit(Request $request, ClientPurchaseOrder $clientPurchaseOrder)
-    {
-        Gate::authorize('update', $clientPurchaseOrder);
-
-        $from = $request->query('from') === 'pipeline' ? 'pipeline' : null;
-
-        if ($reason = $clientPurchaseOrder->lockReason()) {
-            return redirect()
-                ->route($from === 'pipeline' ? 'pipelines.index' : 'client-purchase-orders.index')
-                ->with('stock_warning', $reason);
-        }
-
-        return Inertia::render('ClientPurchaseOrder/Edit', [
-            'clientPurchaseOrder' => $clientPurchaseOrder->load([
-                'client', 'contactPerson', 'quotation:id,quotation_number',
-                'transaction:id,name,amount', 'items.variant.brand',
-            ]),
-            'catalog' => $this->catalog(),
-            'from'    => $from,
-        ]);
-    }
-
-    protected function rules(): array
-    {
-        return [
-            'from'                    => 'nullable|string|in:pipeline',
-            'client_po_number'        => 'nullable|string|max:120',
-            'client_po_date'          => 'nullable|date',
-            'note'                    => 'nullable|string|max:500',
-            'confirm'                 => 'nullable|boolean',
-
-            // Same fields the quotation prints.
-            'markup_percent'          => 'required|numeric|min:0|max:1000',
-            'vat_percent'             => 'required|numeric|min:0|max:100',
-            'remarks'                 => 'nullable|string',
-            'prepared_by'             => 'nullable|string|max:255',
-            'prepared_by_position'    => 'nullable|string|max:255',
-
-            'items'                   => 'required|array|min:1',
-            'items.*.item_variant_id' => 'required|exists:item_variants,id',
-            'items.*.quantity'        => 'required|integer|min:1|max:1000000',
-            'items.*.unit_price'      => 'required|numeric|min:0',
-        ];
-    }
-
-    public function update(Request $request, ClientPurchaseOrder $clientPurchaseOrder)
-    {
-        Gate::authorize('update', $clientPurchaseOrder);
-
-        if ($reason = $clientPurchaseOrder->lockReason()) {
-            return back()->withErrors(['client_po' => $reason]);
-        }
-
-        $v    = $request->validate($this->rules());
-        $rows = $this->buildItemRows($v['items'], 'unit_price');
-        $wantsConfirm = $request->boolean('confirm') && $clientPurchaseOrder->status === 'draft';
-
-        // "Save and confirm" is a confirmation, so it needs the confirm permission as well.
-        if ($wantsConfirm) {
-            Gate::authorize('confirm', $clientPurchaseOrder);
-        }
-
-        try {
-            DB::transaction(function () use ($v, $rows, $clientPurchaseOrder, $wantsConfirm) {
-                $subtotal = (float) collect($rows)->sum(fn ($r) => $r['quantity'] * $r['unit_price']);
-
-                $clientPurchaseOrder->update([
-                    'client_po_number'     => $v['client_po_number'] ?? null,
-                    'client_po_date'       => $v['client_po_date'] ?? null,
-                    'note'                 => $v['note'] ?? null,
-                    'markup_percent'       => $v['markup_percent'],
-                    'vat_percent'          => $v['vat_percent'],
-                    'remarks'              => $v['remarks'] ?? null,
-                    'prepared_by'          => $v['prepared_by'] ?? null,
-                    'prepared_by_position' => $v['prepared_by_position'] ?? null,
-                    // Grand total: subtotal + markup + VAT.
-                    'amount'               => Transaction::breakdown(
-                        $subtotal,
-                        (float) $v['markup_percent'],
-                        (float) $v['vat_percent'],
-                    )['total'],
-                ]);
-
-                $clientPurchaseOrder->items()->delete();
-                $clientPurchaseOrder->items()->createMany($rows);
-
-                if ($clientPurchaseOrder->status === 'confirmed') {
-                    // Already confirmed: keep the transaction in step with the edit.
-                    $clientPurchaseOrder->syncToTransaction();
-                } elseif ($wantsConfirm) {
-                    $clientPurchaseOrder->confirm(auth()->id());
-                }
-            });
-        } catch (\RuntimeException $e) {
-            // Everything above is rolled back, so nothing is half-saved.
-            return back()->withErrors(['client_po' => $e->getMessage()]);
-        }
-
-        $message = $wantsConfirm
-            ? "{$clientPurchaseOrder->cpo_number} confirmed. The transaction's items, markup, VAT and amount now match it."
-            : ($clientPurchaseOrder->status === 'confirmed'
-                ? "{$clientPurchaseOrder->cpo_number} saved. The transaction's items, markup, VAT and amount were updated."
-                : "{$clientPurchaseOrder->cpo_number} saved as a draft.");
-
-        // Came from the pipeline card? Go back to the board.
-        $target = ($v['from'] ?? null) === 'pipeline' ? 'pipelines.index' : 'client-purchase-orders.index';
-
-        return redirect()->route($target)->with('stock', $message);
-    }
-
-    public function confirm(ClientPurchaseOrder $clientPurchaseOrder)
+    /** Confirm: the client's PO number and PO date are required and entered here. */
+    public function confirm(Request $request, ClientPurchaseOrder $clientPurchaseOrder)
     {
         Gate::authorize('confirm', $clientPurchaseOrder);
 
+        $v = $request->validate([
+            'client_po_number' => 'required|string|max:120',
+            'client_po_date'   => 'required|date',
+        ]);
+
         try {
-            $clientPurchaseOrder->confirm(auth()->id());
+            $clientPurchaseOrder->confirm(auth()->id(), $v['client_po_number'], $v['client_po_date']);
         } catch (\RuntimeException $e) {
             return back()->withErrors(['status' => $e->getMessage()]);
         }

@@ -1,27 +1,19 @@
+// resources/js/Pages/Transaction/Index.jsx
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout';
 import PageHeading from '@/Components/PageHeading';
 import PageCard from '@/Components/PageCard';
 import PageToolbar from '@/Components/PageToolbar';
+import TransactionTable from '@/Components/Transaction/TransactionTable';
+import StageHistoryModal from '@/Components/Transaction/StageHistoryModal';
 import ConfirmDelete from '@/Components/ConfirmationModal/ConfirmDelete';
+import Pagination from '@/Components/ui/Pagination';
+import useServerFilters from '@/Hooks/useServerFilters';
+import { FilterBar, FilterSelect, SearchBox, Tabs } from '@/Components/Index';
+import DeliveryHistoryModal from '@/Components/Transaction/DeliveryHistoryModal';
 import { Head, Link, usePage } from '@inertiajs/react';
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/Components/ui/table';
 import { Button } from '@/Components/ui/Button';
-import { Pencil, Plus, Search, Trash2 } from 'lucide-react';
-import { useMemo, useState } from 'react';
-import { PriorityPill, currency, cx, inputCls } from '@/Components/ui/kit';
-
-const STATUS_TABS = [
-    ['open', 'Open'],
-    ['won', 'Won'],
-    ['lost', 'Lost'],
-    ['all', 'All'],
-];
-
-const statusStyle = {
-    open: 'bg-sky-50 text-sky-700 ring-sky-200',
-    won: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-    lost: 'bg-red-50 text-red-700 ring-red-200',
-};
+import { Plus } from 'lucide-react';
+import { useState } from 'react';
 
 /**
  * PERMISSION (the server checks all of these again):
@@ -29,58 +21,40 @@ const statusStyle = {
  *   edit_transaction    transaction.edit   -> Edit button
  *   delete_transaction  transaction.delete -> Delete button
  *   view_amounts        amounts.view       -> Amount column
+ *   (cross-check)       transaction.view   -> shown on every won deal
+ *
+ * Stage history (who moved the card to which stage, and when) is read-only,
+ * so everyone who can see the list can open it.
  */
-export default function Index({ transactions }) {
+export default function Index({ transactions: paginator, stages = [], counts, filters: initialFilters }) {
     const can = usePage().props.auth?.can ?? {};
     const canCreate = Boolean(can.create_transaction);
     const canEdit = Boolean(can.edit_transaction);
     const canDelete = Boolean(can.delete_transaction);
     const canViewAmounts = Boolean(can.view_amounts);
-    const showActions = canEdit || canDelete;
 
     const [deleting, setDeleting] = useState(null);
-    const [q, setQ] = useState('');
-    const [status, setStatus] = useState('open');
-    const [priority, setPriority] = useState('');
-    const [stage, setStage] = useState('');
 
-    const counts = useMemo(() => {
-        const c = { open: 0, won: 0, lost: 0, all: transactions.length };
-        transactions.forEach((t) => {
-            c[t.status] = (c[t.status] ?? 0) + 1;
-        });
-        return c;
-    }, [transactions]);
+    // The row whose stage history is open. Only the id is stored so the modal always reads fresh data.
+    const [historyId, setHistoryId] = useState(null);
+    const [deliveryId, setDeliveryId] = useState(null);
 
-    // Distinct stages found in the data, in pipeline order, for the stage filter.
-    const stageOptions = useMemo(() => {
-        const map = new Map();
-        transactions.forEach((t) => {
-            if (t.stage) map.set(t.stage.id, t.stage);
-        });
-        return [...map.values()].sort((a, b) => a.sort_order - b.sort_order);
-    }, [transactions]);
+    // Status tab, search, stage, priority and page size all run on the server.
+    // This page defaults to the "open" tab, so 'open' is the value left out of the URL.
+    const [filters, setFilter] = useServerFilters(route('transactions.index'), initialFilters, { status: 'open' });
 
-    const rows = useMemo(() => {
-        const term = q.trim().toLowerCase();
-        return transactions.filter((t) => {
-            if (status !== 'all' && t.status !== status) return false;
-            if (priority && t.priority !== priority) return false;
-            if (stage && String(t.stage?.id) !== stage) return false;
-            if (!term) return true;
-            const haystack = [
-                t.name,
-                t.client?.client_name,
-                t.contact_person?.contact_person,
-                t.stage?.stage_name,
-                ...(t.items ?? []).map((i) => `${i.item_name} ${i.brand_name}`),
-            ]
-                .filter(Boolean)
-                .join(' ')
-                .toLowerCase();
-            return haystack.includes(term);
-        });
-    }, [transactions, q, status, priority, stage]);
+    const rows = paginator.data;
+    const historyRow  = historyId  ? rows.find((r) => r.id === historyId)  ?? null : null;
+    const deliveryRow = deliveryId ? rows.find((r) => r.id === deliveryId) ?? null : null;
+
+    // "Clear filters" resets search, stage and priority (the status tab stays as chosen).
+    const hasFilters = filters.search || filters.priority || filters.stage;
+
+    const clearFilters = () => {
+        setFilter('search', '');
+        setFilter('priority', '');
+        setFilter('stage', '');
+    };
 
     return (
         <AuthenticatedLayout header={<PageHeading title="Transactions" subtitle="Every deal, its client and its value." />}>
@@ -102,165 +76,61 @@ export default function Index({ transactions }) {
                 }
             >
                 <div className="p-5">
-                    <div className="mb-4 flex flex-wrap items-center gap-3">
-                        <div className="inline-flex rounded-lg bg-slate-100 p-1" role="tablist" aria-label="Status">
-                            {STATUS_TABS.map(([value, label]) => (
-                                <button
-                                    key={value}
-                                    type="button"
-                                    role="tab"
-                                    aria-selected={status === value}
-                                    onClick={() => setStatus(value)}
-                                    className={cx(
-                                        'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition',
-                                        status === value ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800',
-                                    )}
-                                >
-                                    {label}
-                                    <span className="text-xs tabular-nums text-slate-400">{counts[value] ?? 0}</span>
-                                </button>
-                            ))}
-                        </div>
-
-                        <div className="relative w-full sm:w-72">
-                            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                            <input
-                                type="search"
-                                aria-label="Search transactions"
-                                placeholder="Search name, client, stage or item"
-                                value={q}
-                                onChange={(e) => setQ(e.target.value)}
-                                className={cx(inputCls, 'pl-9')}
-                            />
-                        </div>
-
-                        <select
-                            aria-label="Filter by stage"
-                            value={stage}
-                            onChange={(e) => setStage(e.target.value)}
-                            className={cx(inputCls, 'w-44')}
-                        >
+                    <FilterBar>
+                        <Tabs
+                            label="Status"
+                            value={filters.status}
+                            onChange={(v) => setFilter('status', v)}
+                            options={[
+                                ['open', 'Open', counts?.open ?? 0],
+                                ['won', 'Won', counts?.won ?? 0],
+                                ['lost', 'Lost', counts?.lost ?? 0],
+                                ['all', 'All', counts?.all ?? 0],
+                            ]}
+                        />
+                        <SearchBox
+                            value={filters.search}
+                            onChange={(v) => setFilter('search', v)}
+                            placeholder="Search name, client, stage or item"
+                            label="Search transactions"
+                        />
+                        <FilterSelect label="Filter by stage" value={filters.stage} onChange={(v) => setFilter('stage', v)}>
                             <option value="">All stages</option>
-                            {stageOptions.map((s) => (
+                            {stages.map((s) => (
                                 <option key={s.id} value={s.id}>{s.stage_name}</option>
                             ))}
-                        </select>
-
-                        <select
-                            aria-label="Filter by priority"
-                            value={priority}
-                            onChange={(e) => setPriority(e.target.value)}
-                            className={cx(inputCls, 'w-40')}
-                        >
+                        </FilterSelect>
+                        <FilterSelect label="Filter by priority" value={filters.priority} onChange={(v) => setFilter('priority', v)}>
                             <option value="">All priorities</option>
                             {['Low', 'Medium', 'High', 'Critical'].map((p) => (
                                 <option key={p} value={p}>{p}</option>
                             ))}
-                        </select>
-
-                        {(q || priority || stage) && (
-                            <Button
-                                variant="ghost"
-                                onClick={() => {
-                                    setQ('');
-                                    setPriority('');
-                                    setStage('');
-                                }}
-                            >
+                        </FilterSelect>
+                        {hasFilters && (
+                            <Button variant="ghost" onClick={clearFilters}>
                                 Clear filters
                             </Button>
                         )}
-                    </div>
+                    </FilterBar>
 
-                    {rows.length === 0 ? (
-                        <div className="py-14 text-center">
-                            <p className="text-sm font-semibold text-slate-900">No transactions found</p>
-                            <p className="mt-1 text-sm text-slate-500">
-                                {canCreate ? 'Change the filters, or create a new transaction.' : 'Change the filters to see more.'}
-                            </p>
-                        </div>
-                    ) : (
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead>Transaction</TableHead>
-                                    <TableHead>Client</TableHead>
-                                    <TableHead>Pipeline stage</TableHead>
-                                    <TableHead>Priority</TableHead>
-                                    <TableHead>Status</TableHead>
-                                    <TableHead className="text-right">Items</TableHead>
-                                    {canViewAmounts && <TableHead className="text-right">Amount</TableHead>}
-                                    {showActions && <TableHead className="text-right">Actions</TableHead>}
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {rows.map((t) => (
-                                    <TableRow key={t.id}>
-                                        <TableCell>
-                                            <p className="font-medium text-slate-900">{t.name || '—'}</p>
-                                            <p
-                                                className="max-w-xs truncate text-xs text-slate-500"
-                                                title={(t.items ?? []).map((i) => `${i.item_name} — ${i.brand_name}`).join(', ')}
-                                            >
-                                                {(t.items ?? []).map((i) => i.item_name).join(', ') || 'No items'}
-                                            </p>
-                                        </TableCell>
-                                        <TableCell>
-                                            <p>{t.client?.client_name ?? '—'}</p>
-                                            <p className="text-xs text-slate-500">{t.contact_person?.contact_person ?? ''}</p>
-                                        </TableCell>
-                                        <TableCell>
-                                            {t.stage ? (
-                                                <span className="inline-flex rounded-full bg-[#eef1f5] px-2.5 py-0.5 text-xs font-medium text-[#3a4157] ring-1 ring-inset ring-[#bccad6]">
-                                                    {t.stage.stage_name}
-                                                </span>
-                                            ) : (
-                                                '—'
-                                            )}
-                                            <p className="mt-0.5 text-xs text-slate-500">{t.pipeline?.pipeline_name ?? ''}</p>
-                                        </TableCell>
-                                        <TableCell>
-                                            <PriorityPill value={t.priority} />
-                                        </TableCell>
-                                        <TableCell>
-                                            <span
-                                                className={cx(
-                                                    'inline-flex rounded-full px-2 py-0.5 text-xs font-medium capitalize ring-1 ring-inset',
-                                                    statusStyle[t.status] ?? statusStyle.open,
-                                                )}
-                                            >
-                                                {t.status}
-                                            </span>
-                                        </TableCell>
-                                        <TableCell className="text-right tabular-nums">{t.items?.length ?? 0}</TableCell>
-                                        {canViewAmounts && (
-                                            <TableCell className="text-right font-medium tabular-nums">
-                                                {t.amount != null ? currency(t.amount) : '—'}
-                                            </TableCell>
-                                        )}
-                                        {showActions && (
-                                            <TableCell className="flex justify-end gap-2 text-right">
-                                                {canEdit && (
-                                                    <Link href={route('transactions.edit', t.id)}>
-                                                        <Button variant="outline" size="icon" aria-label="Edit transaction">
-                                                            <Pencil className="h-4 w-4" />
-                                                        </Button>
-                                                    </Link>
-                                                )}
-                                                {canDelete && (
-                                                    <Button variant="outline" size="icon" aria-label="Delete transaction" onClick={() => setDeleting(t)}>
-                                                        <Trash2 className="h-4 w-4" />
-                                                    </Button>
-                                                )}
-                                            </TableCell>
-                                        )}
-                                    </TableRow>
-                                ))}
-                            </TableBody>
-                        </Table>
-                    )}
+                    <TransactionTable
+                        rows={rows}
+                        canEdit={canEdit}
+                        canDelete={canDelete}
+                        canViewAmounts={canViewAmounts}
+                        onDelete={setDeleting}
+                        onHistory={(row) => setHistoryId(row.id)}
+                        onDeliveries={(row) => setDeliveryId(row.id)}
+                        emptyTitle="No transactions found"
+                        emptyHint={canCreate ? 'Change the filters, or create a new transaction.' : 'Change the filters to see more.'}
+                    />
+
+                    <Pagination paginator={paginator} onPerPageChange={(n) => setFilter('per_page', n)} />
                 </div>
             </PageCard>
+
+            <StageHistoryModal transaction={historyRow} stages={stages} onClose={() => setHistoryId(null)} />
+            <DeliveryHistoryModal transaction={deliveryRow} onClose={() => setDeliveryId(null)} />
 
             {canDelete && (
                 <ConfirmDelete

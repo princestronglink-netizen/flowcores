@@ -148,7 +148,7 @@ function VersionHistory({ transaction, versions, canRestore }) {
     );
 }
 
-export default function Edit({ transaction, clients, catalog, itemsLocked = false, versions = [] }) {
+export default function Edit({ transaction, clients, catalog, itemsLocked = false, poConfirmed = false, versions = [] }) {
     const can = usePage().props.auth?.can ?? {};
 
     return (
@@ -161,12 +161,13 @@ export default function Edit({ transaction, clients, catalog, itemsLocked = fals
                 catalog={catalog}
                 transaction={transaction}
                 itemsLocked={itemsLocked}
+                poConfirmed={poConfirmed}
             />
             {transaction.quotation_number && (
                 <VersionHistory
                     transaction={transaction}
                     versions={versions}
-                    canRestore={!transaction.quotation_frozen && !itemsLocked && Boolean(can.edit_quotation)}
+                    canRestore={!transaction.quotation_frozen && !itemsLocked && !poConfirmed && Boolean(can.edit_quotation)}
                 />
             )}
         </AuthenticatedLayout>

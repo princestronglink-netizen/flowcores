@@ -17,6 +17,7 @@ class PipelineStage extends Model
         'stage_name',
         'stage_description',
         'sort_order',
+        'max_days',
         'is_initial',
         'is_final',
         'deducts_stock',
@@ -26,6 +27,7 @@ class PipelineStage extends Model
     ];
 
     protected $casts = [
+        'max_days'             => 'integer',
         'is_initial'           => 'boolean',
         'is_final'             => 'boolean',
         'deducts_stock'        => 'boolean',
