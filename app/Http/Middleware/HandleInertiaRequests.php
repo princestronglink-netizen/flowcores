@@ -10,6 +10,7 @@ use App\Models\Pipeline;
 use App\Models\PipelineStage;
 use App\Models\StockMovement;
 use App\Models\Transaction;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Inertia\Middleware;
 
@@ -40,6 +41,13 @@ class HandleInertiaRequests extends Middleware
                     // Used by the sidebar.
                     'manage_roles'    => $user->can('roles.manage'),
                     'manage_users'    => $user->can('users.manage'),
+
+                    // Users (UserPolicy): list, create, reset password, touch admin accounts.
+                    'view_users'          => $user->can('viewAny', User::class),
+                    'create_user'         => $user->can('create', User::class),
+                    'reset_user_password' => $user->can('users.reset_password'),
+                    'manage_admins'       => $user->can('users.manage_admins'),
+                    'send_user_credentials' => $user->can('users.send_credentials'),
 
                     // Used by the pipeline view to show/hide prices and amounts.
                     'view_amounts'    => $user->can('amounts.view'),
@@ -105,6 +113,9 @@ class HandleInertiaRequests extends Middleware
                 'stock'          => fn () => $request->session()->get('stock'),
                 'stock_warning'  => fn () => $request->session()->get('stock_warning'),
                 'stock_returned' => fn () => $request->session()->get('stock_returned'),
+                'success'        => fn () => $request->session()->get('success'),
+                'warning'        => fn () => $request->session()->get('warning'),
+                'error'          => fn () => $request->session()->get('error'),
             ],
         ];
     }

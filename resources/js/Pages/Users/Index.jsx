@@ -3,13 +3,17 @@ import PageHeading from '@/Components/PageHeading';
 import PageCard from '@/Components/PageCard';
 import PageToolbar from '@/Components/PageToolbar';
 import UserTable from '@/Components/User/UserTable';
+import ResetPasswordModal from '@/Components/User/ResetPasswordModal';
+import SendCredentialsModal from '@/Components/User/SendCredentialsModal';
 import Modal from '@/Components/Modal';
 import { FilterBar, FilterSelect, SearchBox } from '@/Components/Index';
 import { Button } from '@/Components/ui/Button';
 import { cx } from '@/Components/ui/kit';
 import { Head, router, useForm, usePage } from '@inertiajs/react';
 import { useMemo, useState } from 'react';
-import { Eye, EyeOff, Plus, ShieldCheck, UserX, Users as UsersIcon } from 'lucide-react';
+import { Plus, ShieldCheck, UserX, Users as UsersIcon } from 'lucide-react';
+
+const ADMIN_ROLE = 'super_admin';
 
 const field =
     'mt-1 block h-10 w-full rounded-lg border border-slate-300 px-3 text-sm focus:border-[#667292] focus:outline-none focus:ring-2 focus:ring-[#667292]/20';
@@ -29,17 +33,21 @@ function Stat({ icon: Icon, label, value, tone = 'text-[#667292] bg-[#eef1f5]' }
 }
 
 export default function Index({ users, roles, currentId, actorIsAdmin }) {
-    const { errors: pageErrors } = usePage().props;
+    const { errors: pageErrors, flash, auth } = usePage().props;
+    const canReset = auth?.can?.reset_user_password;
+    const canSend = auth?.can?.send_user_credentials;
+
     const [open, setOpen] = useState(false);
     const [editing, setEditing] = useState(null); // null = creating
-    const [showPassword, setShowPassword] = useState(false);
+    const [resetTarget, setResetTarget] = useState(null);
+    const [sendTarget, setSendTarget] = useState(null);
+    const [busy, setBusy] = useState(false);
     const [q, setQ] = useState('');
     const [roleFilter, setRoleFilter] = useState('');
 
     const { data, setData, post, put, processing, errors, clearErrors } = useForm({
         name: '',
         email: '',
-        password: '',
         role: '',
     });
 
@@ -63,16 +71,14 @@ export default function Index({ users, roles, currentId, actorIsAdmin }) {
 
     const openNew = () => {
         setEditing(null);
-        setData({ name: '', email: '', password: '', role: '' });
-        setShowPassword(false);
+        setData({ name: '', email: '', role: '' });
         clearErrors();
         setOpen(true);
     };
 
     const openEdit = (u) => {
         setEditing(u);
-        setData({ name: u.name, email: u.email, password: '', role: u.role ?? '' });
-        setShowPassword(false);
+        setData({ name: u.name, email: u.email, role: u.role ?? '' });
         clearErrors();
         setOpen(true);
     };
@@ -95,7 +101,22 @@ export default function Index({ users, roles, currentId, actorIsAdmin }) {
         }
     };
 
-    // A non-admin manager can't touch admin accounts.
+    // Shared by reset and send credentials: post, show the spinner, close the modal.
+    const sendAction = (routeName, target, clear) => {
+        router.post(route(routeName, target.id), {}, {
+            preserveScroll: true,
+            onStart: () => setBusy(true),
+            onFinish: () => {
+                setBusy(false);
+                clear(null);
+            },
+        });
+    };
+
+    const confirmReset = () => sendAction('users.reset-password', resetTarget, setResetTarget);
+    const confirmSend = () => sendAction('users.send-credentials', sendTarget, setSendTarget);
+
+    // actorIsAdmin = can manage admin accounts (users.manage_admins).
     const canEditUser = (u) => actorIsAdmin || !u.is_admin;
     const hasFilters = q || roleFilter;
     const noData = users.length === 0;
@@ -115,6 +136,12 @@ export default function Index({ users, roles, currentId, actorIsAdmin }) {
                 }
             >
                 <div className="p-5">
+                    {flash?.success && (
+                        <p role="status" className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm text-emerald-800">
+                            {flash.success}
+                        </p>
+                    )}
+
                     {pageErrors?.user && (
                         <p role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-800">
                             {pageErrors.user}
@@ -132,8 +159,8 @@ export default function Index({ users, roles, currentId, actorIsAdmin }) {
                             <SearchBox value={q} onChange={setQ} placeholder="Search name or email" label="Search users" />
                             <FilterSelect label="Filter by role" value={roleFilter} onChange={setRoleFilter}>
                                 <option value="">All roles</option>
-                                {actorIsAdmin && <option value="admin">admin</option>}
-                                {roles.filter((r) => r !== 'admin').map((r) => (
+                                {actorIsAdmin && <option value={ADMIN_ROLE}>{ADMIN_ROLE}</option>}
+                                {roles.filter((r) => r !== ADMIN_ROLE).map((r) => (
                                     <option key={r} value={r}>{r}</option>
                                 ))}
                                 <option value="__none">No role</option>
@@ -158,6 +185,8 @@ export default function Index({ users, roles, currentId, actorIsAdmin }) {
                         canEditUser={canEditUser}
                         onEdit={openEdit}
                         onDelete={remove}
+                        onResetPassword={canReset ? setResetTarget : null}
+                        onSendCredentials={canSend ? setSendTarget : null}
                         emptyTitle={noData ? 'No users yet' : 'No users found'}
                         emptyHint={noData ? 'Create the first user.' : 'Change the filters or create a new user.'}
                     />
@@ -178,7 +207,7 @@ export default function Index({ users, roles, currentId, actorIsAdmin }) {
                         <div>
                             <h2 className="text-base font-semibold text-slate-900">{editing ? 'Edit user' : 'New user'}</h2>
                             <p className="text-sm text-slate-500">
-                                {editing ? 'Update the details or change the role.' : 'They can log in right away with this password.'}
+                                {editing ? 'Update the details or change the role.' : 'A password will be generated and emailed to them.'}
                             </p>
                         </div>
                     </div>
@@ -197,31 +226,11 @@ export default function Index({ users, roles, currentId, actorIsAdmin }) {
                             </div>
                         </div>
 
-                        <div>
-                            <label htmlFor="user_password" className="text-xs font-medium text-slate-600">
-                                Password {editing && <span className="font-normal text-slate-400">· leave blank to keep the current one</span>}
-                            </label>
-                            <div className="relative">
-                                <input
-                                    id="user_password"
-                                    type={showPassword ? 'text' : 'password'}
-                                    autoComplete="new-password"
-                                    value={data.password}
-                                    onChange={(e) => setData('password', e.target.value)}
-                                    className={cx(field, 'pr-10')}
-                                />
-                                <button
-                                    type="button"
-                                    onClick={() => setShowPassword((v) => !v)}
-                                    aria-label={showPassword ? 'Hide password' : 'Show password'}
-                                    className="absolute right-2 top-1/2 mt-0.5 -translate-y-1/2 rounded p-1.5 text-slate-400 hover:text-slate-700"
-                                >
-                                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                                </button>
-                            </div>
-                            <p className="mt-1 text-xs text-slate-400">At least 8 characters.</p>
-                            {errors.password && <p className="mt-1 text-xs text-red-600">{errors.password}</p>}
-                        </div>
+                        {!editing && (
+                            <p className="rounded-lg bg-slate-50 px-3 py-2.5 text-xs text-slate-500">
+                                A password will be generated automatically and emailed to this user.
+                            </p>
+                        )}
 
                         <div>
                             <p className="text-xs font-medium text-slate-600">Role <span className="font-normal text-slate-400">· one per user</span></p>
@@ -268,6 +277,26 @@ export default function Index({ users, roles, currentId, actorIsAdmin }) {
                     </div>
                 </form>
             </Modal>
+
+            {/* Reset password confirm */}
+            <ResetPasswordModal
+                open={!!resetTarget}
+                onClose={() => setResetTarget(null)}
+                onConfirm={confirmReset}
+                loading={busy}
+                userName={resetTarget?.name}
+                userEmail={resetTarget?.email}
+            />
+
+            {/* Send credentials confirm */}
+            <SendCredentialsModal
+                open={!!sendTarget}
+                onClose={() => setSendTarget(null)}
+                onConfirm={confirmSend}
+                loading={busy}
+                userName={sendTarget?.name}
+                userEmail={sendTarget?.email}
+            />
         </AuthenticatedLayout>
     );
 }

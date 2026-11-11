@@ -2,7 +2,9 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@
 import { Button } from '@/Components/ui/Button';
 import { EmptyState, RowActions } from '@/Components/Index';
 import { cx } from '@/Components/ui/kit';
-import { Pencil, ShieldCheck, Trash2 } from 'lucide-react';
+import { KeyRound, Mail, Pencil, ShieldCheck, Trash2 } from 'lucide-react';
+
+const ADMIN_ROLE = 'super_admin';
 
 // Same role always gets the same color.
 const BADGES = [
@@ -16,7 +18,7 @@ const BADGES = [
 const AVATARS = ['bg-[#667292]', 'bg-sky-600', 'bg-violet-600', 'bg-emerald-600', 'bg-rose-500', 'bg-teal-600', 'bg-orange-500'];
 
 const hash = (s) => [...String(s)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
-const badgeFor = (role) => (role === 'admin' ? 'bg-[#3a4157] text-white ring-[#3a4157]' : BADGES[hash(role) % BADGES.length]);
+const badgeFor = (role) => (role === ADMIN_ROLE ? 'bg-[#3a4157] text-white ring-[#3a4157]' : BADGES[hash(role) % BADGES.length]);
 const avatarFor = (name) => AVATARS[hash(name) % AVATARS.length];
 
 function RoleBadge({ role }) {
@@ -29,13 +31,23 @@ function RoleBadge({ role }) {
     }
     return (
         <span className={cx('inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium capitalize ring-1 ring-inset', badgeFor(role))}>
-            {role === 'admin' && <ShieldCheck className="h-3 w-3" />}
+            {role === ADMIN_ROLE && <ShieldCheck className="h-3 w-3" />}
             {role}
         </span>
     );
 }
 
-export default function UserTable({ rows, currentId, canEditUser, onEdit, onDelete, emptyTitle, emptyHint }) {
+export default function UserTable({
+    rows,
+    currentId,
+    canEditUser,
+    onEdit,
+    onDelete,
+    onResetPassword,
+    onSendCredentials,
+    emptyTitle,
+    emptyHint,
+}) {
     return (
         <Table>
             <TableHeader>
@@ -93,6 +105,28 @@ export default function UserTable({ rows, currentId, canEditUser, onEdit, onDele
                                             >
                                                 <Pencil className="h-4 w-4" />
                                             </Button>
+                                            {onSendCredentials && u.id !== currentId && (
+                                                <Button
+                                                    variant="outline"
+                                                    size="icon"
+                                                    aria-label={`Send credentials to ${u.name}`}
+                                                    title="Send credentials"
+                                                    onClick={() => onSendCredentials(u)}
+                                                >
+                                                    <Mail className="h-4 w-4" />
+                                                </Button>
+                                            )}
+                                            {onResetPassword && u.id !== currentId && (
+                                                <Button
+                                                    variant="outline"
+                                                    size="icon"
+                                                    aria-label={`Reset password for ${u.name}`}
+                                                    title="Reset & email password"
+                                                    onClick={() => onResetPassword(u)}
+                                                >
+                                                    <KeyRound className="h-4 w-4" />
+                                                </Button>
+                                            )}
                                             {u.id !== currentId && (
                                                 <Button
                                                     variant="outline"
