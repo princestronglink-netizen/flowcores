@@ -21,7 +21,8 @@ class DatabaseSeeder extends Seeder
             PipelineStageSeeder::class,
             PermissionSeeder::class,     
             RolePermissionSeeder::class,
-            SuperAdminSeeder::class,     
+            SuperAdminSeeder::class,    
+            ResetPasswordPermissionSeeder::class, 
         ]);
     }
 }
