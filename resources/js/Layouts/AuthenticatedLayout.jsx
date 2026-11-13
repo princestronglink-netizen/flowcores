@@ -29,7 +29,7 @@ const navGroups = [
     {
         label: 'Workspace',
         items: [
-            { name: 'Dashboard', route: 'dashboard.index', icon: LayoutGrid },
+            { name: 'Dashboard', route: 'dashboard', icon: LayoutGrid },
             { name: 'Quotations', route: 'quotations.index', icon: FileText, needs: 'view_quotations' },
             { name: 'Client POs', route: 'client-purchase-orders.index', icon: ClipboardList, needs: 'view_client_pos' },
             { name: 'Transactions', route: 'transactions.index', icon: Receipt, needs: 'view_transactions' },
@@ -73,7 +73,7 @@ function SidebarContent({ user, can, onNavigate, collapsed = false }) {
         <div className="flex h-full flex-col bg-[#0f1a2e] text-slate-300">
             {/* Brand */}
             <div className={cx('flex h-14 shrink-0 items-center border-b border-white/10', collapsed ? 'justify-center' : 'px-5')}>
-                <Link href="/" onClick={onNavigate} className="flex items-center gap-2.5 overflow-hidden">
+                <Link href={route('dashboard')} onClick={onNavigate} className="flex items-center gap-2.5 overflow-hidden">
                     <img src={LOGO_URL} alt="FlowCore" className="h-7 w-7 shrink-0 object-contain" />
                     {!collapsed && <span className="text-[15px] font-semibold tracking-tight text-white">FlowCoreS</span>}
                 </Link>

@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\ClientController;
 use App\Http\Controllers\ClientPurchaseOrderController;
+use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\DeliveryController;
 use App\Http\Controllers\ItemCategoryController;
 use App\Http\Controllers\ItemController;
@@ -16,11 +17,10 @@ use App\Http\Controllers\UserController;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
-Route::redirect('/', '/dashboard');
-
 Route::middleware(['auth'])->group(function () {
 
-    Route::get('/dashboard', fn () => Inertia::render('Dashboard/Index'))->name('dashboard.index');
+    // ---- Dashboard lives at "/" (Pages/Dashboard.jsx) ----
+    Route::get('/', [DashboardController::class, 'index'])->name('dashboard');
     Route::get('/profile', fn () => Inertia::render('Profile/Edit'))->name('profile.edit');
 
     // ---- Transactions ----
@@ -127,3 +127,6 @@ Route::middleware(['auth'])->group(function () {
     // ---- Ledger ----
     Route::get('stock-movements', [StockMovementController::class, 'index'])->name('stock-movements.index');
 });
+
+// Login / logout routes. Uncomment if you use Breeze or Fortify and the file exists:
+// require __DIR__.'/auth.php';
