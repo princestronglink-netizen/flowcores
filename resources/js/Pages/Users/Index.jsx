@@ -5,6 +5,7 @@ import PageToolbar from '@/Components/PageToolbar';
 import UserTable from '@/Components/User/UserTable';
 import ResetPasswordModal from '@/Components/User/ResetPasswordModal';
 import SendCredentialsModal from '@/Components/User/SendCredentialsModal';
+import ConfirmDelete from '@/Components/ConfirmationModal/ConfirmDelete';
 import Modal from '@/Components/Modal';
 import { FilterBar, FilterSelect, SearchBox } from '@/Components/Index';
 import { Button } from '@/Components/ui/Button';
@@ -41,6 +42,7 @@ export default function Index({ users, roles, currentId, actorIsAdmin }) {
     const [editing, setEditing] = useState(null); // null = creating
     const [resetTarget, setResetTarget] = useState(null);
     const [sendTarget, setSendTarget] = useState(null);
+    const [deleteTarget, setDeleteTarget] = useState(null);
     const [busy, setBusy] = useState(false);
     const [q, setQ] = useState('');
     const [roleFilter, setRoleFilter] = useState('');
@@ -93,12 +95,6 @@ export default function Index({ users, roles, currentId, actorIsAdmin }) {
         const options = { preserveScroll: true, onSuccess: close };
         if (editing) put(route('users.update', editing.id), options);
         else post(route('users.store'), options);
-    };
-
-    const remove = (u) => {
-        if (window.confirm(`Delete the account of ${u.name} (${u.email})?`)) {
-            router.delete(route('users.destroy', u.id), { preserveScroll: true });
-        }
     };
 
     // Shared by reset and send credentials: post, show the spinner, close the modal.
@@ -184,7 +180,7 @@ export default function Index({ users, roles, currentId, actorIsAdmin }) {
                         currentId={currentId}
                         canEditUser={canEditUser}
                         onEdit={openEdit}
-                        onDelete={remove}
+                        onDelete={setDeleteTarget}
                         onResetPassword={canReset ? setResetTarget : null}
                         onSendCredentials={canSend ? setSendTarget : null}
                         emptyTitle={noData ? 'No users yet' : 'No users found'}
@@ -296,6 +292,19 @@ export default function Index({ users, roles, currentId, actorIsAdmin }) {
                 loading={busy}
                 userName={sendTarget?.name}
                 userEmail={sendTarget?.email}
+            />
+
+            {/* Delete confirm */}
+            <ConfirmDelete
+                show={!!deleteTarget}
+                onClose={() => setDeleteTarget(null)}
+                deleteUrl={deleteTarget ? route('users.destroy', deleteTarget.id) : null}
+                title="Delete user?"
+                description={
+                    deleteTarget
+                        ? `This will permanently delete the account of ${deleteTarget.name} (${deleteTarget.email}). This cannot be undone.`
+                        : ''
+                }
             />
         </AuthenticatedLayout>
     );
