@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\ResolvesPerPage;
+use App\Models\ActivityLog;
 use App\Models\Client;
 use App\Models\Delivery;
 use App\Models\Item;
@@ -33,6 +34,10 @@ use Inertia\Inertia;
  *
  * DELIVERED ITEMS:
  *   Once anything is delivered (even partially) the card can no longer go back to a previous stage.
+ *
+ * ACTIVITY LOG:
+ *   transaction.created / updated / deleted are logged by the LogsActivity trait on the model.
+ *   Stage moves, deal status and quotation revisions are logged explicitly below.
  */
 class TransactionController extends Controller
 {
@@ -593,6 +598,7 @@ class TransactionController extends Controller
         $user     = auth()->user();
         $messages = [];
 
+        // "transaction.created" is logged automatically by the LogsActivity trait on the model.
         DB::transaction(function () use ($validated, $pipeline, $initialStage, $amount, $itemRows, $user, &$messages) {
             $transaction = Transaction::create([
                 'name'                     => $validated['name'],
@@ -636,6 +642,7 @@ class TransactionController extends Controller
 
         // Client PO confirmed: the quotation is locked. Only priority and winning message
         // (which are not printed on the quotation) can still be changed.
+        // The trait logs "transaction.updated" for these field changes.
         if ($this->hasConfirmedPo($transaction)) {
             $v = $request->validate([
                 'priority'        => 'required|in:Low,Medium,High,Critical',
@@ -679,6 +686,16 @@ class TransactionController extends Controller
         // Keep any DRAFT client PO in step with the edited quotation. Confirmed POs are untouched.
         $transaction->clientPurchaseOrders()->where('status', 'draft')->get()
             ->each->syncFromTransaction();
+
+        if ($newVersion) {
+            ActivityLog::record(
+                'quotation.revised',
+                "Quotation of “{$transaction->name}” saved as {$transaction->quotation_number}",
+                $transaction,
+                ['quotation_number' => $transaction->quotation_number, 'amount' => $transaction->amount],
+                $transaction->name,
+            );
+        }
 
         $response = $this->backTo($request);
 
@@ -757,7 +774,6 @@ class TransactionController extends Controller
                     'pipeline_stage_id' => 'Deliver every item in full before moving past the delivery stage.',
                 ]);
             }
-
         }
 
         if ($stage->is_final && $transaction->deliveryBlocksCompletion()) {
@@ -772,10 +788,21 @@ class TransactionController extends Controller
             return back()->withErrors(['pipeline_stage_id' => $e->getMessage()]);
         }
 
+        ActivityLog::record(
+            'transaction.stage_moved',
+            "Moved “{$transaction->name}” from " . ($from?->stage_name ?? '—') . " to {$stage->stage_name}",
+            $transaction,
+            ['from' => $from?->stage_name, 'to' => $stage->stage_name],
+            $transaction->name,
+        );
+
         return $messages ? back()->with('stock', implode(' ', $messages)) : back();
     }
 
-    /** Delivery records are never wiped: goods that are still out must be returned first. */
+    /**
+     * Delivery records are never wiped: goods that are still out must be returned first.
+     * "transaction.deleted" is logged automatically by the LogsActivity trait.
+     */
     public function destroy(Transaction $transaction)
     {
         Gate::authorize('delete', $transaction);
@@ -839,6 +866,19 @@ class TransactionController extends Controller
         } catch (\RuntimeException $e) {
             return back()->withErrors(['status' => $e->getMessage()]);
         }
+
+        ActivityLog::record(
+            "deal.{$validated['status']}",
+            "Marked “{$transaction->name}” as " . strtoupper($validated['status']),
+            $transaction,
+            [
+                'stage'       => $transaction->stage?->stage_name,
+                'outstanding' => $outstanding,
+                'restocked'   => $outstanding > 0 ? $restock : null,
+                'reason'      => $validated['reason'] ?? null,
+            ],
+            $transaction->name,
+        );
 
         $response = back();
 

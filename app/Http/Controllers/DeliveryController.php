@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Exceptions\InsufficientStockException;
+use App\Models\ActivityLog;
 use App\Models\Delivery;
 use App\Models\Transaction;
 use Illuminate\Http\Request;
@@ -22,12 +23,11 @@ class DeliveryController extends Controller
         ];
     }
 
-    /** DR: the delivery receipt number and softcopy are REQUIRED for every delivery (not for returns). */
     private function drRules(): array
     {
         return [
             'dr_number' => 'required|string|max:60',
-            'dr_file'   => 'required|file|mimes:pdf,jpg,jpeg,png,webp|max:10240', // 10 MB
+            'dr_file'   => 'required|file|mimes:pdf,jpg,jpeg,png,webp|max:10240',
         ];
     }
 
@@ -66,22 +66,18 @@ class DeliveryController extends Controller
     /** Record a (full or partial) delivery. The card never moves because of this. */
     public function store(Request $request, Transaction $transaction)
     {
-        // Permission first: nothing is validated or stored for a user who isn't allowed.
         if (Gate::denies('recordDelivery', $transaction)) {
             return back()->withErrors([
                 'items' => "You don't have permission to record deliveries in this stage.",
             ]);
         }
 
-        // DR number and DR softcopy are required here.
         $validated = $request->validate($this->rules() + $this->drRules(), $this->drMessages());
 
-        // A delivery must actually deliver something.
         if (collect($validated['items'])->sum(fn ($i) => (int) $i['quantity']) <= 0) {
             return back()->withErrors(['items' => 'Enter a quantity to deliver for at least one item.']);
         }
 
-        // DR: save the softcopy on the private disk first; it is removed again if the delivery fails.
         $file = $request->file('dr_file');
         $path = $file->store("delivery-receipts/{$transaction->id}", 'local');
 
@@ -91,30 +87,42 @@ class DeliveryController extends Controller
                 auth()->id(),
                 $validated['note'] ?? null,
                 $validated['request_token'] ?? null,
-                [ // DR
+                [
                     'dr_number'    => trim($validated['dr_number']),
                     'dr_file_path' => $path,
                     'dr_file_name' => $file->getClientOriginalName(),
                 ],
             );
         } catch (InsufficientStockException $e) {
-            $this->discardFile($path); // DR
+            $this->discardFile($path);
 
-            // Shown inside the modal, which stays open. Nothing was saved.
             return back()->withErrors(['items' => 'Delivery not recorded. ' . $e->getMessage()]);
         } catch (\RuntimeException $e) {
-            $this->discardFile($path); // DR
+            $this->discardFile($path);
 
             return back()->withErrors(['items' => $e->getMessage()]);
         } catch (\Throwable $e) {
-            $this->discardFile($path); // DR
+            $this->discardFile($path);
 
             throw $e;
         }
 
-        // DR: a double click / network retry returned the first delivery, so the new file is not used.
         if (! $delivery->wasRecentlyCreated) {
+            // Double click / retry: the first delivery was returned, so nothing new to log.
             $this->discardFile($path);
+        } else {
+            ActivityLog::record(
+                'delivery.recorded',
+                "Recorded delivery for “{$transaction->name}” (DR {$delivery->dr_number})",
+                $transaction,
+                [
+                    'delivery_id' => $delivery->id,
+                    'dr_number'   => $delivery->dr_number,
+                    'units'       => (int) $delivery->items()->sum('quantity'),
+                    'note'        => $delivery->note,
+                ],
+                $transaction->name,
+            );
         }
 
         [$ordered, $delivered] = $this->totals($transaction);
@@ -127,7 +135,6 @@ class DeliveryController extends Controller
     /** Return delivered items: restock the good ones, write off the rest, replace or reduce the order. */
     public function returnItems(Request $request, Transaction $transaction)
     {
-        // Returns are allowed from later stages too, so this checks the DELIVERY stage's permission.
         if (Gate::denies('recordReturn', $transaction)) {
             return back()->withErrors([
                 'items' => "You don't have permission to record returns.",
@@ -136,7 +143,6 @@ class DeliveryController extends Controller
 
         $validated = $request->validate($this->returnRules());
 
-        // A return must actually return something.
         if (collect($validated['items'])->sum(fn ($i) => (int) $i['quantity']) <= 0) {
             return back()->withErrors(['items' => 'Enter a quantity to return for at least one item.']);
         }
@@ -154,7 +160,6 @@ class DeliveryController extends Controller
             return back()->withErrors(['items' => $e->getMessage()]);
         }
 
-        // Only move back if the card is past delivery AND something still has to be (re)delivered.
         $target = $transaction->isFullyDelivered()
             ? null
             : $transaction->returnToDeliveryStage(auth()->id(), 'Items returned: sent back to delivery');
@@ -164,6 +169,24 @@ class DeliveryController extends Controller
         $writtenOff = (int) $items->sum('written_off_quantity');
         $restocked  = $returned - $writtenOff;
         $cancelled  = (int) abs($items->where('needs_replacement', false)->sum('quantity'));
+
+        if ($delivery->wasRecentlyCreated) {
+            ActivityLog::record(
+                'delivery.returned',
+                "Recorded return for “{$transaction->name}”: {$restocked} restocked, {$writtenOff} written off",
+                $transaction,
+                [
+                    'delivery_id'  => $delivery->id,
+                    'returned'     => $returned,
+                    'restocked'    => $restocked,
+                    'written_off'  => $writtenOff,
+                    'cancelled'    => $cancelled,
+                    'moved_back_to' => $target?->stage_name,
+                    'note'         => $delivery->note,
+                ],
+                $transaction->name,
+            );
+        }
 
         [$ordered, $delivered] = $this->totals($transaction);
 
@@ -179,7 +202,7 @@ class DeliveryController extends Controller
         return back()->with('stock_returned', $message);
     }
 
-    /** DR: the softcopy is private, so it is only served to logged-in users (route is in the auth group). */
+    /** The softcopy is private, so it is only served to logged-in users. */
     public function drFile(Delivery $delivery)
     {
         abort_unless(
@@ -190,7 +213,6 @@ class DeliveryController extends Controller
         return Storage::disk('local')->response($delivery->dr_file_path, $delivery->dr_file_name);
     }
 
-    /** DR: delete an uploaded softcopy that is not going to be used. */
     private function discardFile(?string $path): void
     {
         if ($path) {

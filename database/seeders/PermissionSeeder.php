@@ -58,6 +58,9 @@ class PermissionSeeder extends Seeder
             'category.create',
             'category.edit',
             'category.delete',
+
+            // Activity log
+            'activity.view',
         ];
 
         foreach ($names as $name) {

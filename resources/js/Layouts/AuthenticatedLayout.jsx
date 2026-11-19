@@ -5,6 +5,7 @@ import {
     ClipboardList,
     FileText,
     GitBranch,
+    History as HistoryIcon,
     LayoutGrid,
     LogOut,
     Menu,
@@ -51,6 +52,7 @@ const navGroups = [
         items: [
             { name: 'Users', route: 'users.index', icon: Users, needs: 'manage_users' },
             { name: 'Roles & Permissions', route: 'roles.index', icon: ShieldCheck, needs: 'manage_roles' },
+            { name: 'Activity log', route: 'activity-logs.index', icon: HistoryIcon, needs: 'view_activity_logs' },
         ],
     },
 ];

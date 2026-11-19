@@ -9,10 +9,22 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use App\Models\Concerns\LogsActivity;
 
 class Transaction extends Model
 {
-    use HasQuotation;
+    use HasQuotation, LogsActivity;
+
+    protected function activityLabel(): string
+    {
+        return (string) ($this->name ?? "#{$this->id}");
+    }
+
+    /** These change on every stage move or save. They are logged explicitly instead. */
+    protected function activityIgnore(): array
+    {
+        return ['amount', 'stage_entered_at', 'pipeline_stage_id', 'status', 'quotation_issued_at'];
+    }
 
     protected $table = 'transactions';
 

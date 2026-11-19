@@ -101,6 +101,9 @@ class HandleInertiaRequests extends Middleware
                     'stock_in'          => $user->can('stockIn', StockMovement::class),
                     'adjust_stock'      => $user->can('adjust', StockMovement::class),
 
+                    // Activity logs (ActivityLogPolicy): sidebar link + list.
+                    'view_activity_logs' => $user->can('activity.view'),
+
                     // IDs of the stages this user may move cards into.
                     'move_stage_ids'  => PipelineStage::all()
                         ->filter(fn ($s) => $user->can($s->permissionName()))

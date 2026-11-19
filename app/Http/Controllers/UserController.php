@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Mail\TemporaryPasswordMail;
+use App\Models\ActivityLog;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
@@ -14,7 +15,6 @@ use Spatie\Permission\Models\Role;
 
 class UserController extends Controller
 {
-    /** Role that marks a protected account (same value as in UserPolicy). */
     private const ADMIN_ROLE = 'super_admin';
 
     private function actorCanManageAdmins(): bool
@@ -22,7 +22,6 @@ class UserController extends Controller
         return auth()->user()->can('users.manage_admins');
     }
 
-    /** Roles the current user may hand out. Only admin managers can give the admin role. */
     private function assignableRoles(): array
     {
         return Role::where('guard_name', 'web')
@@ -43,7 +42,7 @@ class UserController extends Controller
         $password = Str::password(12, symbols: false);
 
         $user->forceFill([
-            'password'       => $password, // hashed by the User model cast
+            'password'       => $password,
             'remember_token' => null,
         ])->save();
 
@@ -88,14 +87,23 @@ class UserController extends Controller
             'role'  => ['required', 'string', Rule::in($this->assignableRoles())],
         ]);
 
+        // The LogsActivity trait on User logs "user.created" (password is never stored in the log).
         $user = User::create([
             'name'     => $data['name'],
             'email'    => $data['email'],
-            'password' => Str::random(40), // placeholder, replaced right below
+            'password' => Str::random(40),
         ]);
 
         $user->forceFill(['email_verified_at' => now()])->save();
         $user->syncRoles([$data['role']]);
+
+        ActivityLog::record(
+            'user.role_changed',
+            "Assigned role “{$data['role']}” to {$user->name}",
+            $user,
+            ['old' => null, 'new' => $data['role']],
+            $user->name,
+        );
 
         if (! $this->issueTemporaryPassword($user)) {
             return back()->withErrors(['user' => 'User created, but the email could not be sent. Use the reset button to try again.']);
@@ -114,13 +122,25 @@ class UserController extends Controller
             'role'  => ['required', 'string', Rule::in($this->assignableRoles())],
         ]);
 
-        // Never leave the system without an admin.
         if ($this->isLastAdmin($user) && $data['role'] !== self::ADMIN_ROLE) {
             return back()->withErrors(['role' => 'This is the only admin. Make another user an admin before changing this role.']);
         }
 
+        $oldRole = $user->roles->first()?->name;
+
+        // Trait logs "user.updated" if name / email really changed.
         $user->update(['name' => $data['name'], 'email' => $data['email']]);
         $user->syncRoles([$data['role']]);
+
+        if ($oldRole !== $data['role']) {
+            ActivityLog::record(
+                'user.role_changed',
+                "Changed role of {$user->name} from " . ($oldRole ?? 'none') . " to {$data['role']}",
+                $user,
+                ['old' => $oldRole, 'new' => $data['role']],
+                $user->name,
+            );
+        }
 
         return back();
     }
@@ -129,7 +149,17 @@ class UserController extends Controller
     {
         Gate::authorize('resetPassword', $user);
 
-        if (! $this->issueTemporaryPassword($user, isReset: true)) {
+        $sent = $this->issueTemporaryPassword($user, isReset: true);
+
+        ActivityLog::record(
+            'user.password_reset',
+            "Reset password of {$user->name}" . ($sent ? '' : ' (email failed)'),
+            $user,
+            ['email_sent' => $sent],
+            $user->name,
+        );
+
+        if (! $sent) {
             return back()->withErrors(['user' => 'The password was reset, but the email could not be sent. Check your mail settings and try again.']);
         }
 
@@ -140,7 +170,17 @@ class UserController extends Controller
     {
         Gate::authorize('sendCredentials', $user);
 
-        if (! $this->issueTemporaryPassword($user)) {
+        $sent = $this->issueTemporaryPassword($user);
+
+        ActivityLog::record(
+            'user.credentials_sent',
+            "Sent credentials to {$user->name}" . ($sent ? '' : ' (email failed)'),
+            $user,
+            ['email_sent' => $sent],
+            $user->name,
+        );
+
+        if (! $sent) {
             return back()->withErrors(['user' => 'The password was changed, but the email could not be sent. Check your mail settings and try again.']);
         }
 
@@ -155,6 +195,7 @@ class UserController extends Controller
             return back()->withErrors(['user' => "You can't delete the only admin."]);
         }
 
+        // Trait logs "user.deleted".
         $user->delete();
 
         return back();

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\ResolvesPerPage;
+use App\Models\ActivityLog;
 use App\Models\Item;
 use App\Models\ItemCategory;
 use App\Models\StockMovement;
@@ -68,7 +69,6 @@ class ItemController extends Controller
                 'category' => $category,
                 'per_page' => $perPage,
             ],
-            // Tab counts across ALL items (not just the current page).
             'counts'     => [
                 'all'     => Item::count(),
                 'restock' => Item::whereHas('brands.variants', fn ($v) => $v->needsRestock())->count(),
@@ -107,11 +107,25 @@ class ItemController extends Controller
             'brands.*.brand_name'                 => 'required|string|max:255',
             'brands.*.variants'                   => 'required|array|min:1',
             'brands.*.variants.*.id'              => 'nullable|integer',
-            // User-defined: any text is accepted.
             'brands.*.variants.*.unit_of_measure' => 'required|string|max:50',
             'brands.*.variants.*.size'            => 'nullable|string|max:100',
-            // Opening stock for NEW variants only. Existing stock changes go through Stock in / Stock out / Adjust stock.
             'brands.*.variants.*.stock'           => 'required|integer|min:0',
+        ];
+    }
+
+    /** Compact picture of an item for the activity log (no stock numbers: those live in the ledger). */
+    private function snapshot(Item $item): array
+    {
+        $item->load('brands.variants');
+
+        return [
+            'item_name'        => $item->item_name,
+            'item_category_id' => $item->item_category_id,
+            'description'      => $item->description,
+            'brands'           => $item->brands->map(fn ($b) => [
+                'brand'    => $b->brand_name,
+                'variants' => $b->variants->pluck('label')->all(),
+            ])->all(),
         ];
     }
 
@@ -121,7 +135,7 @@ class ItemController extends Controller
 
         $validated = $request->validate($this->rules());
 
-        DB::transaction(function () use ($validated) {
+        $item = DB::transaction(function () use ($validated) {
             $item = Item::create([
                 'item_category_id' => $validated['item_category_id'] ?? null,
                 'item_name'        => $validated['item_name'],
@@ -129,7 +143,17 @@ class ItemController extends Controller
             ]);
 
             $this->syncBrands($item, $validated['brands']);
+
+            return $item;
         });
+
+        ActivityLog::record(
+            'item.created',
+            "Created item “{$item->item_name}”",
+            $item,
+            ['new' => $this->snapshot($item)],
+            $item->item_name,
+        );
 
         return redirect()->route('items.index');
     }
@@ -139,6 +163,8 @@ class ItemController extends Controller
         Gate::authorize('update', $item);
 
         $validated = $request->validate($this->rules());
+
+        $before = $this->snapshot($item);
 
         DB::transaction(function () use ($validated, $item) {
             $item->update([
@@ -150,6 +176,18 @@ class ItemController extends Controller
             $this->syncBrands($item, $validated['brands']);
         });
 
+        $after = $this->snapshot($item->refresh());
+
+        if ($before !== $after) {
+            ActivityLog::record(
+                'item.updated',
+                "Updated item “{$item->item_name}”",
+                $item,
+                ['old' => $before, 'new' => $after],
+                $item->item_name,
+            );
+        }
+
         return redirect()->route('items.index');
     }
 
@@ -157,7 +195,9 @@ class ItemController extends Controller
     {
         Gate::authorize('delete', $item);
 
-        // Fails if any variant is used in a transaction (restrictOnDelete).
+        $before = $this->snapshot($item);
+        $name   = $item->item_name;
+
         try {
             $item->delete();
         } catch (\Illuminate\Database\QueryException $e) {
@@ -166,15 +206,21 @@ class ItemController extends Controller
             ]);
         }
 
+        ActivityLog::record(
+            'item.deleted',
+            "Deleted item “{$name}”",
+            $item,
+            ['old' => $before],
+            $name,
+        );
+
         return redirect()->route('items.index');
     }
 
     /**
      * Create/update brands and variants while keeping existing IDs,
      * so transaction lines that point to a variant stay valid.
-     * Stock of an existing variant is NEVER overwritten from the form
-     * (a stale form would wipe out deliveries made in the meantime).
-     * Price and reorder level no longer exist as inputs; the reorder point is computed automatically.
+     * Stock of an existing variant is NEVER overwritten from the form.
      */
     private function syncBrands(Item $item, array $brands): void
     {

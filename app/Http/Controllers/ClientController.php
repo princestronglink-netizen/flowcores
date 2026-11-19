@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\ResolvesPerPage;
+use App\Models\ActivityLog;
 use App\Models\Client;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
@@ -46,7 +47,6 @@ class ClientController extends Controller
                 ->paginate($perPage)
                 ->withQueryString(),
             'filters' => ['search' => $search, 'per_page' => $perPage],
-            // Lets the page tell "no clients at all" apart from "no search match".
             'hasAny'  => Client::exists(),
         ]);
     }
@@ -88,6 +88,18 @@ class ClientController extends Controller
             $client->contactPeople()->create($contact);
         }
 
+        ActivityLog::record(
+            'client.created',
+            "Created client “{$client->client_name}”",
+            $client,
+            ['new' => [
+                'client_name' => $client->client_name,
+                'address'     => $client->address,
+                'contacts'    => collect($validated['contacts'])->pluck('contact_person')->all(),
+            ]],
+            $client->client_name,
+        );
+
         return redirect()->back();
     }
 
@@ -102,15 +114,37 @@ class ClientController extends Controller
             'contacts.*.email'          => 'nullable|email|max:255',
         ]);
 
+        $before = [
+            'client_name' => $client->client_name,
+            'address'     => $client->address,
+            'contacts'    => $client->contactPeople()->pluck('contact_person')->all(),
+        ];
+
         $client->update([
             'client_name' => $validated['client_name'],
             'address'     => $validated['address'] ?? null,
         ]);
 
-        // Wipe and recreate. Note: this changes contact IDs, see the warning below.
+        // Wipe and recreate. Note: this changes contact IDs.
         $client->contactPeople()->delete();
         foreach ($validated['contacts'] as $contact) {
             $client->contactPeople()->create($contact);
+        }
+
+        $after = [
+            'client_name' => $validated['client_name'],
+            'address'     => $validated['address'] ?? null,
+            'contacts'    => collect($validated['contacts'])->pluck('contact_person')->all(),
+        ];
+
+        if ($before !== $after) {
+            ActivityLog::record(
+                'client.updated',
+                "Updated client “{$client->client_name}”",
+                $client,
+                ['old' => $before, 'new' => $after],
+                $client->client_name,
+            );
         }
 
         return redirect()->back();
@@ -120,7 +154,18 @@ class ClientController extends Controller
     {
         Gate::authorize('delete', $client);
 
+        $name = $client->client_name;
+        $id   = $client->id;
+
         $client->delete();
+
+        ActivityLog::record(
+            'client.deleted',
+            "Deleted client “{$name}”",
+            $client,
+            ['old' => ['client_name' => $name, 'id' => $id]],
+            $name,
+        );
 
         return redirect()->back();
     }
@@ -143,6 +188,14 @@ class ClientController extends Controller
             'email'          => $validated['email'] ?? null,
         ]);
 
+        ActivityLog::record(
+            'client.created',
+            "Created client “{$client->client_name}” (quick add)",
+            $client,
+            ['new' => ['client_name' => $client->client_name, 'contacts' => [$validated['contact_person']]]],
+            $client->client_name,
+        );
+
         return response()->json($client->load('contactPeople'));
     }
 
@@ -153,6 +206,16 @@ class ClientController extends Controller
 
         $validated = $request->validate($this->contactRules());
 
-        return response()->json($client->contactPeople()->create($validated));
+        $contact = $client->contactPeople()->create($validated);
+
+        ActivityLog::record(
+            'client.contact_added',
+            "Added contact “{$contact->contact_person}” to client “{$client->client_name}”",
+            $client,
+            ['contact' => $validated],
+            $client->client_name,
+        );
+
+        return response()->json($contact);
     }
 }

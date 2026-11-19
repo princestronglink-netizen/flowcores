@@ -14,6 +14,7 @@ use App\Http\Controllers\StockMovementController;
 use App\Http\Controllers\TransactionController;
 use App\Http\Controllers\TransactionQuotationController;
 use App\Http\Controllers\UserController;
+use App\Http\Controllers\ActivityLogController;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
@@ -126,6 +127,9 @@ Route::middleware(['auth'])->group(function () {
 
     // ---- Ledger ----
     Route::get('stock-movements', [StockMovementController::class, 'index'])->name('stock-movements.index');
+
+    // ---- Activity Logs ----
+    Route::get('activity-logs', [ActivityLogController::class, 'index'])->name('activity-logs.index');
 });
 
 // Login / logout routes. Uncomment if you use Breeze or Fortify and the file exists:

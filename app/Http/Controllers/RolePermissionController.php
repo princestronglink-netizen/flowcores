@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\ActivityLog;
 use App\Models\PipelineStage;
 use App\Support\PermissionLabel;
 use Illuminate\Http\Request;
@@ -14,11 +15,9 @@ class RolePermissionController extends Controller
 {
     public function index()
     {
-        // Every stage always has its own permission.
         $stages = PipelineStage::orderBy('sort_order')->get(['id', 'stage_code', 'stage_name']);
         $stages->each(fn ($s) => Permission::findOrCreate(PipelineStage::permissionFor($s->stage_code), 'web'));
 
-        // General access = every permission in the database except the per-stage ones.
         $general = Permission::where('guard_name', 'web')
             ->where('name', 'not like', 'stage.%')
             ->orderBy('name')
@@ -55,7 +54,15 @@ class RolePermissionController extends Controller
             ],
         ]);
 
-        Role::create(['name' => $data['name'], 'guard_name' => 'web']);
+        $role = Role::create(['name' => $data['name'], 'guard_name' => 'web']);
+
+        ActivityLog::record(
+            'role.created',
+            "Created role “{$role->name}”",
+            $role,
+            ['new' => ['name' => $role->name]],
+            $role->name,
+        );
 
         return back();
     }
@@ -71,19 +78,41 @@ class RolePermissionController extends Controller
             'permissions.*' => 'string',
         ]);
 
-        // Rename (only when a name was sent).
-        if (isset($data['name'])) {
+        if (isset($data['name']) && $data['name'] !== $role->name) {
+            $oldName = $role->name;
             $role->update(['name' => $data['name']]);
+
+            ActivityLog::record(
+                'role.renamed',
+                "Renamed role “{$oldName}” to “{$role->name}”",
+                $role,
+                ['old' => $oldName, 'new' => $role->name],
+                $role->name,
+            );
         }
 
-        // Change permissions (only when a list was sent, so a rename never wipes them).
         if ($request->has('permissions')) {
-            // Real models from the database, so only existing permissions can be granted.
+            $before = $role->permissions()->pluck('name');
+
             $permissions = Permission::where('guard_name', 'web')
                 ->whereIn('name', $data['permissions'] ?? [])
                 ->get();
 
             $role->syncPermissions($permissions->all());
+
+            $after   = $permissions->pluck('name');
+            $added   = $after->diff($before)->values()->all();
+            $removed = $before->diff($after)->values()->all();
+
+            if ($added || $removed) {
+                ActivityLog::record(
+                    'role.permissions_changed',
+                    "Changed permissions of role “{$role->name}” (+" . count($added) . ' / -' . count($removed) . ')',
+                    $role,
+                    ['added' => $added, 'removed' => $removed],
+                    $role->name,
+                );
+            }
         }
 
         return back();
@@ -95,7 +124,17 @@ class RolePermissionController extends Controller
             return back()->withErrors(['role' => "Remove \"{$role->name}\" from its users before deleting it."]);
         }
 
+        $name = $role->name;
+
         $role->delete();
+
+        ActivityLog::record(
+            'role.deleted',
+            "Deleted role “{$name}”",
+            $role,
+            ['old' => ['name' => $name]],
+            $name,
+        );
 
         return back();
     }

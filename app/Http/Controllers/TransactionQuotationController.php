@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\ResolvesPerPage;
+use App\Models\ActivityLog;
 use App\Models\Client;
 use App\Models\ClientContactPerson;
 use App\Models\ItemVariant;
@@ -14,6 +15,8 @@ use Inertia\Inertia;
 /**
  * The quotation is a document of the transaction. There is nothing to create or edit here:
  * editing happens in the transaction form, this controller lists, prints and restores.
+ *
+ * ACTIVITY LOG: restores and prints of the current quotation are logged.
  */
 class TransactionQuotationController extends Controller
 {
@@ -61,6 +64,15 @@ class TransactionQuotationController extends Controller
         // (A sent quotation is frozen, so the transaction's remarks are the ones that were sent.)
         $remarks = collect([data_get($doc, 'remarks'), data_get($doc, 'note'), $transaction->remarks])
             ->first(fn ($v) => filled($v));
+
+        // Useful for tracing who looked at the prices.
+        ActivityLog::record(
+            'quotation.printed',
+            "Opened quotation {$transaction->quotation_number} for printing",
+            $transaction,
+            [],
+            $transaction->name,
+        );
 
         return Inertia::render('Quotation/Print', [
             'quotation' => $this->withPricing(
@@ -163,6 +175,14 @@ class TransactionQuotationController extends Controller
 
         // Keep the stored amount equal to items + markup + VAT.
         $transaction->refresh()->syncAmount();
+
+        ActivityLog::record(
+            'quotation.restored',
+            "Restored an older quotation version on “{$transaction->name}” (now {$transaction->quotation_number})",
+            $transaction,
+            ['restored_version' => $version->version, 'quotation_number' => $transaction->quotation_number],
+            $transaction->name,
+        );
 
         return redirect()->route('transactions.edit', array_filter([
             'transaction' => $transaction->id,

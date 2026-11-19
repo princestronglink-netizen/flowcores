@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Exceptions\InsufficientStockException;
+use App\Models\ActivityLog;
 use App\Models\ItemVariant;
 use App\Models\StockMovement;
 use Illuminate\Http\Request;
@@ -13,11 +14,6 @@ use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 
 /**
- * Manual stock corrections: ADD or REMOVE stock for many items at once
- * (miscount, damage found in a count, etc.).
- * One submit = one action + one reason + many lines, all or nothing,
- * every line goes to the stock ledger.
- *
  * PERMISSIONS (StockMovementPolicy):
  *   index        -> adjust (stock.adjust)
  *   store        -> adjust (stock.adjust)
@@ -35,7 +31,6 @@ class StockAdjustController extends Controller
                 ->latest('id')
                 ->limit(10)
                 ->get(),
-            // Lets the Items page link straight here with ?variant=ID.
             'preselect' => $request->integer('variant') ?: null,
         ]);
     }
@@ -63,7 +58,6 @@ class StockAdjustController extends Controller
         $isIn    = $validated['direction'] === 'in';
         $reasons = $isIn ? StockMovement::ADJUST_REASONS_IN : StockMovement::ADJUST_REASONS_OUT;
 
-        // "Damaged" can't add stock, "Stock received" can't remove it.
         if (! array_key_exists($validated['reason'], $reasons)) {
             throw ValidationException::withMessages([
                 'reason' => 'That reason does not match adding/removing stock.',
@@ -73,14 +67,12 @@ class StockAdjustController extends Controller
         $sign        = $isIn ? 1 : -1;
         $reasonLabel = $reasons[$validated['reason']];
 
-        // Same variant on two rows? Add them up.
         $lines = collect($validated['items'])
             ->groupBy('item_variant_id')
             ->map(fn ($rows) => (int) $rows->sum('quantity'));
 
         try {
             DB::transaction(function () use ($validated, $lines, $sign, $isIn, $reasonLabel) {
-                // Lock in id order so two people working at once can't deadlock.
                 $variants = ItemVariant::with('brand.item')
                     ->whereIn('id', $lines->keys())
                     ->orderBy('id')
@@ -120,10 +112,21 @@ class StockAdjustController extends Controller
         $units = $lines->sum();
         $verb  = $isIn ? 'added to' : 'removed from';
 
+        ActivityLog::record(
+            'stock.adjusted',
+            "{$units} unit(s) {$verb} stock across {$lines->count()} item(s). Reason: {$reasonLabel}",
+            null,
+            [
+                'direction' => $validated['direction'],
+                'reason'    => $validated['reason'],
+                'note'      => $validated['note'] ?? null,
+                'lines'     => $lines->all(), // variant_id => quantity
+            ],
+        );
+
         return back()->with('stock', "{$units} unit(s) {$verb} stock across {$lines->count()} item(s). Reason: {$reasonLabel}.");
     }
 
-    /** Flat list for the picker: "Paint — Boysen (pcs · 4 L)". */
     private function variantOptions()
     {
         return ItemVariant::with('brand.item')

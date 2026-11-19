@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\ActivityLog;
 use App\Models\ItemVariant;
 use App\Models\StockMovement;
 use App\Models\StockReceipt;
@@ -46,7 +47,6 @@ class StockInController extends Controller
             'items.*.quantity'        => 'required|integer|min:1|max:1000000',
         ]);
 
-        // Same variant on two rows? Add them up.
         $lines = collect($validated['items'])
             ->groupBy('item_variant_id')
             ->map(fn ($rows) => (int) $rows->sum('quantity'));
@@ -60,7 +60,6 @@ class StockInController extends Controller
                 'received_by' => auth()->id(),
             ]);
 
-            // Lock in id order so two people receiving at once can't deadlock.
             $variants = ItemVariant::whereIn('id', $lines->keys())->orderBy('id')->lockForUpdate()->get()->keyBy('id');
 
             $label = collect(["Receipt #{$receipt->id}", $receipt->supplier, $receipt->reference])->filter()->implode(' · ');
@@ -80,6 +79,18 @@ class StockInController extends Controller
 
         $units = $lines->sum();
 
+        ActivityLog::record(
+            'stock.in',
+            "Received stock: {$units} unit(s) across {$lines->count()} item(s) (Receipt #{$receipt->id})",
+            $receipt,
+            [
+                'supplier'  => $receipt->supplier,
+                'reference' => $receipt->reference,
+                'lines'     => $lines->all(), // variant_id => quantity
+            ],
+            "Receipt #{$receipt->id}",
+        );
+
         return back()->with('stock', "Receipt #{$receipt->id} saved: {$units} unit(s) added to stock across {$lines->count()} item(s).");
     }
 
@@ -93,7 +104,6 @@ class StockInController extends Controller
                 'label'  => $v->brand->item->item_name . ' — ' . $v->brand->brand_name
                           . ' (' . collect([$v->unit_of_measure, $v->size])->filter()->implode(' · ') . ')',
                 'stock'  => (int) $v->stock,
-                // stock_status exists once ItemVariant has the optional reorder-level upgrade.
                 'status' => $v->stock_status ?? ($v->stock > 0 ? 'ok' : 'out'),
             ])
             ->sortBy('label', SORT_NATURAL | SORT_FLAG_CASE)

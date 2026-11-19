@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\ResolvesPerPage;
+use App\Models\ActivityLog;
 use App\Models\ClientPurchaseOrder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
@@ -14,8 +15,6 @@ use Inertia\Inertia;
  *   cancel           -> update   (client_po.edit)
  *   confirm          -> confirm  (client_po.confirm)
  *   destroy          -> delete   (client_po.delete)
- * A client PO has no edit screen: while it is a draft it follows the quotation/transaction,
- * and once confirmed it is frozen. Prices are only sent to users with amounts.view.
  */
 class ClientPurchaseOrderController extends Controller
 {
@@ -29,7 +28,6 @@ class ClientPurchaseOrderController extends Controller
         $search  = trim($request->string('search')->toString());
         $perPage = $this->perPage($request);
 
-        // Tab counts come from the DB, not from the current page.
         $counts = ClientPurchaseOrder::query()
             ->selectRaw('status, count(*) as total')
             ->groupBy('status')
@@ -58,7 +56,6 @@ class ClientPurchaseOrderController extends Controller
             ->paginate($perPage)
             ->withQueryString();
 
-        // No amounts.view = the prices never leave the server.
         if (! $request->user()->can('amounts.view')) {
             $orders->getCollection()->each(function ($order) {
                 $order->makeHidden([
@@ -97,6 +94,18 @@ class ClientPurchaseOrderController extends Controller
             return back()->withErrors(['status' => $e->getMessage()]);
         }
 
+        ActivityLog::record(
+            'client_po.confirmed',
+            "Confirmed {$clientPurchaseOrder->cpo_number} (client PO {$v['client_po_number']})",
+            $clientPurchaseOrder,
+            [
+                'client_po_number' => $v['client_po_number'],
+                'client_po_date'   => $v['client_po_date'],
+                'transaction_id'   => $clientPurchaseOrder->transaction_id,
+            ],
+            $clientPurchaseOrder->cpo_number,
+        );
+
         return back()->with('stock', "{$clientPurchaseOrder->cpo_number} confirmed. The transaction's items, markup, VAT and amount now match it.");
     }
 
@@ -110,6 +119,14 @@ class ClientPurchaseOrderController extends Controller
 
         $clientPurchaseOrder->update(['status' => 'cancelled']);
 
+        ActivityLog::record(
+            'client_po.cancelled',
+            "Cancelled {$clientPurchaseOrder->cpo_number}",
+            $clientPurchaseOrder,
+            ['transaction_id' => $clientPurchaseOrder->transaction_id],
+            $clientPurchaseOrder->cpo_number,
+        );
+
         return back();
     }
 
@@ -121,7 +138,17 @@ class ClientPurchaseOrderController extends Controller
             return back()->with('stock_warning', 'Only draft or cancelled client purchase orders can be deleted.');
         }
 
+        $number = $clientPurchaseOrder->cpo_number;
+
         $clientPurchaseOrder->delete();
+
+        ActivityLog::record(
+            'client_po.deleted',
+            "Deleted {$number}",
+            $clientPurchaseOrder,
+            ['transaction_id' => $clientPurchaseOrder->transaction_id],
+            $number,
+        );
 
         return redirect()->route('client-purchase-orders.index');
     }
